@@ -1,0 +1,44 @@
+version: '3.8'
+
+services:
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    volumes:
+      - schn-data:/app/data
+      - schn-models:/app/models
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      - DATABASE_URL=${DATABASE_URL}
+      - JWT_SECRET=${JWT_SECRET}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin123}
+      - CMS_USERNAME=${CMS_USERNAME}
+      - CMS_PASSWORD=${CMS_PASSWORD}
+      - CMS_DEVICE_ID=${CMS_DEVICE_ID:-browser-427558fc-49f6-44fb-9bfc-96fedb7e5a97}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - schn-network
+
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    ports:
+      - "3001:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - schn-network
+
+networks:
+  schn-network:
+    driver: bridge
+
+volumes:
+  schn-data:
+  schn-models:

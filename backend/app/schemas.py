@@ -1,0 +1,214 @@
+# backend/app/schemas.py
+from datetime import datetime
+from typing import Optional, List, Any
+from pydantic import BaseModel, ConfigDict, EmailStr
+
+
+# Auth schemas
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    role: str
+    username: str
+    is_superadmin: bool = False
+
+
+class UserCreate(BaseModel):
+    username: str
+    password: str
+    role: str = "agent"
+
+
+class RegisterRequest(BaseModel):
+    username: str
+    email: EmailStr
+    password: str
+
+
+class UserStats(BaseModel):
+    today_count: int
+    tracked_today: int
+    daily_goal: int
+
+
+class SetGoalRequest(BaseModel):
+    goal: int
+
+
+class UserAdminItem(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    username: str
+    email: str
+    role: str
+    status: str  # pending, active, inactive
+    created_at: datetime
+    ticket_count: int
+    today_count: int
+    tracked_today: int
+    daily_goal: int
+    monthly_cost: float
+    last_login: datetime | None = None
+
+
+class UserResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    username: str
+    email: str
+    role: str
+    created_at: datetime
+    has_api_key: bool
+
+
+# Generate schemas
+class ImageInput(BaseModel):
+    base64: str
+    media_type: str = "image/png"
+
+
+class GenerateRequest(BaseModel):
+    message: str
+    platform_id: int
+    images: Optional[List[ImageInput]] = None
+    # Legacy single-image fields kept for backward compatibility
+    image_base64: Optional[str] = None
+    image_media_type: str = "image/png"
+    agent_notes: Optional[str] = None
+    override_rules: bool = False
+    cms_account: Optional[dict] = None
+    cms_not_found: bool = False
+    cms_no_subscription: bool = False
+
+
+class ParsedData(BaseModel):
+    customer_name: Optional[str] = None
+    customer_email: Optional[str] = None
+    account_number: Optional[str] = None
+    device: Optional[str] = None
+    problem_summary: Optional[str] = None
+    context: Optional[str] = None
+    payment_handler: Optional[str] = None
+    ticket_type: Optional[str] = None  # "technical" | "billing"
+
+
+class FAQSource(BaseModel):
+    chunk_id: int
+    content_preview: str
+    similarity: float
+
+
+class CannedSource(BaseModel):
+    title: str
+    similarity: float
+
+
+class GenerateResponse(BaseModel):
+    parsed: ParsedData
+    response: Optional[str] = None
+    next_steps: Optional[str] = None
+    bot_notes: Optional[str] = None
+    needs_verification: bool = False
+    faq_sources: List[FAQSource] = []
+    canned_sources: List[CannedSource] = []
+    cache_hit: bool = False
+
+
+# Platform schemas
+class PlatformResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    slug: str
+    logo_url: Optional[str] = None
+
+
+# FAQ schemas
+class FAQDocumentResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    filename: str
+    uploaded_at: datetime
+    chunk_count: int
+    platform_id: int
+
+
+class FAQChunkResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    chunk_index: int
+    content: str
+
+
+# History schemas
+class HistoryItem(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    customer_name: Optional[str]
+    problem_summary: Optional[str]
+    created_at: datetime
+    feedback: Optional[str]
+    response_preview: str
+
+
+class HistoryDetail(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    customer_name: Optional[str]
+    customer_message: str
+    parsed_data: Optional[dict]
+    generated_response: str
+    created_at: datetime
+    feedback: Optional[str]
+
+
+class FeedbackRequest(BaseModel):
+    feedback: str  # 'useful' or 'not_useful'
+
+
+class AdjustCounterRequest(BaseModel):
+    delta: int  # +1 or -1
+
+
+# Insights schemas
+class TrendItem(BaseModel):
+    title: str
+    description: str
+    count: int
+    ticket_ids: List[int] = []
+
+
+class TrendsResponse(BaseModel):
+    trends: List[TrendItem]
+    total_tickets_analyzed: int
+    generated_at: datetime
+
+
+# Ticket Tracker schemas
+class TicketLogCreate(BaseModel):
+    ticket_url: str
+    cover_user_id: int | None = None
+
+
+class TicketLogResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    ticket_url: str
+    worked_at: datetime
+
+
+class ApiKeyResponse(BaseModel):
+    api_key: Optional[str]
