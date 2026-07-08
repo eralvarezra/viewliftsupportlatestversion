@@ -8,7 +8,10 @@ from sqlalchemy.orm import Session
 from app.auth.routes import get_current_user
 from app.database import get_db
 from app.models import User, ResponseHistory
-from app.schemas import HistoryItem, HistoryDetail, FeedbackRequest, UserStats, AdjustCounterRequest, SetGoalRequest
+from app.schemas import (
+    HistoryItem, HistoryDetail, FeedbackRequest, UserStats, AdjustCounterRequest, SetGoalRequest,
+    CorrectRequest, ReviewQueueItem, ReviewQueueResponse,
+)
 
 router = APIRouter()
 
@@ -39,6 +42,11 @@ def _feedback_embedding_text(entry: ResponseHistory) -> str:
     ps = (pd.get("problem_summary") or "").strip()
     ctx = (pd.get("context") or "").strip()
     return f"{ps} {ctx}".strip() if ps else entry.customer_message
+
+
+def _require_superadmin(user: User) -> None:
+    if not getattr(user, "is_superadmin", False):
+        raise HTTPException(status_code=403, detail="Superadmin only")
 
 
 def _ensure_embedding(entry: ResponseHistory) -> None:
@@ -145,6 +153,74 @@ async def list_history(
         ))
 
     return history_items
+
+
+@router.get("/review-queue", response_model=ReviewQueueResponse)
+async def get_review_queue(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Bad responses pending developer review (superadmin, all users)."""
+    _require_superadmin(current_user)
+    entries = (
+        db.query(ResponseHistory)
+        .filter(ResponseHistory.feedback == "not_useful", ResponseHistory.review_status == "pending")
+        .order_by(ResponseHistory.created_at.desc())
+        .limit(200)
+        .all()
+    )
+    items = [
+        ReviewQueueItem(
+            id=e.id,
+            customer_name=e.customer_name,
+            customer_message=e.customer_message,
+            generated_response=e.generated_response,
+            created_at=e.created_at,
+            platform_name=e.platform.name if e.platform else None,
+            agent_username=e.user.username if e.user else None,
+        )
+        for e in entries
+    ]
+    return ReviewQueueResponse(count=len(items), items=items)
+
+
+@router.post("/{history_id}/correct")
+async def correct_response(
+    history_id: int,
+    request: CorrectRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Save the developer's corrected response; the pair becomes a learned example."""
+    _require_superadmin(current_user)
+    corrected = (request.corrected_response or "").strip()
+    if not corrected:
+        raise HTTPException(status_code=400, detail="Corrected response cannot be empty")
+    entry = db.query(ResponseHistory).filter(ResponseHistory.id == history_id).first()
+    if not entry:
+        raise HTTPException(status_code=404, detail="History entry not found")
+    entry.corrected_response = corrected
+    entry.review_status = "corrected"
+    entry.feedback = "not_useful"
+    _ensure_embedding(entry)
+    db.commit()
+    return {"message": "Correction saved"}
+
+
+@router.post("/{history_id}/dismiss")
+async def dismiss_response(
+    history_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Mark a bad response as not worth learning from."""
+    _require_superadmin(current_user)
+    entry = db.query(ResponseHistory).filter(ResponseHistory.id == history_id).first()
+    if not entry:
+        raise HTTPException(status_code=404, detail="History entry not found")
+    entry.review_status = "dismissed"
+    db.commit()
+    return {"message": "Dismissed"}
 
 
 @router.get("/{history_id}", response_model=HistoryDetail)

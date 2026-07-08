@@ -192,6 +192,25 @@ class FeedbackRequest(BaseModel):
     feedback: str  # 'useful' or 'not_useful'
 
 
+class CorrectRequest(BaseModel):
+    corrected_response: str
+
+
+class ReviewQueueItem(BaseModel):
+    id: int
+    customer_name: Optional[str]
+    customer_message: str
+    generated_response: str
+    created_at: datetime
+    platform_name: Optional[str] = None
+    agent_username: Optional[str] = None
+
+
+class ReviewQueueResponse(BaseModel):
+    count: int
+    items: List[ReviewQueueItem]
+
+
 class AdjustCounterRequest(BaseModel):
     delta: int  # +1 or -1
 
