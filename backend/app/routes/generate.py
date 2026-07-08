@@ -308,19 +308,21 @@ async def generate(
         if last_response:
             response_text = _fix_bold(last_response.content)
             response_text = _ensure_signatures(response_text, parsed_data.customer_name)
-            db.add(ResponseHistory(
+            _hist = ResponseHistory(
                 user_id=current_user.id,
                 customer_name=parsed_data.customer_name,
                 customer_message=request.message,
                 parsed_data={"ticket_type": "resolved"},
                 generated_response=response_text,
                 platform_id=request.platform_id,
-            ))
+            )
+            db.add(_hist)
             db.commit()
             return GenerateResponse(
                 parsed=parsed_data,
                 response=response_text,
                 canned_sources=[{"title": last_response.title, "similarity": 1.0}],
+                history_id=_hist.id,
             )
 
     # Step 1c: No CMS account found at all -> return "B2C No account associated with email"
@@ -362,19 +364,21 @@ async def generate(
             no_acct_text = no_acct_text.replace("{{ticket.requester.email}}", acct_email)
             no_acct_text = _fix_bold(no_acct_text)
             no_acct_text = _ensure_signatures(no_acct_text, parsed_data.customer_name)
-            db.add(ResponseHistory(
+            _hist = ResponseHistory(
                 user_id=current_user.id,
                 customer_name=parsed_data.customer_name,
                 customer_message=request.message,
                 parsed_data=parsed_data.model_dump(),
                 generated_response=no_acct_text,
                 platform_id=request.platform_id,
-            ))
+            )
+            db.add(_hist)
             db.commit()
             return GenerateResponse(
                 parsed=parsed_data,
                 response=no_acct_text,
                 canned_sources=[{"title": no_acct.title, "similarity": 1.0}],
+                history_id=_hist.id,
             )
 
     # Step 1d: CMS account found but no active subscription -> return "B2C No Subscription"
@@ -397,19 +401,21 @@ async def generate(
             no_sub_text = no_sub_text.replace("{{ticket.requester.email}}", acct_email)
             no_sub_text = _fix_bold(no_sub_text)
             no_sub_text = _ensure_signatures(no_sub_text, parsed_data.customer_name)
-            db.add(ResponseHistory(
+            _hist = ResponseHistory(
                 user_id=current_user.id,
                 customer_name=parsed_data.customer_name,
                 customer_message=request.message,
                 parsed_data=parsed_data.model_dump(),
                 generated_response=no_sub_text,
                 platform_id=request.platform_id,
-            ))
+            )
+            db.add(_hist)
             db.commit()
             return GenerateResponse(
                 parsed=parsed_data,
                 response=no_sub_text,
                 canned_sources=[{"title": no_sub.title, "similarity": 1.0}],
+                history_id=_hist.id,
             )
 
     # Determine which platform's FAQ chunks to search
@@ -502,19 +508,21 @@ async def generate(
             top_content = _format_canned_content(top_content)
             top_content = _fix_bold(top_content)
             top_content = _ensure_signatures(top_content, parsed_data.customer_name)
-            db.add(ResponseHistory(
+            _hist = ResponseHistory(
                 user_id=current_user.id,
                 customer_name=parsed_data.customer_name,
                 customer_message=request.message,
                 parsed_data=parsed_data.model_dump(),
                 generated_response=top_content,
                 platform_id=request.platform_id,
-            ))
+            )
+            db.add(_hist)
             db.commit()
             return GenerateResponse(
                 parsed=parsed_data,
                 response=top_content,
                 canned_sources=[{"title": top_title, "similarity": round(top_score, 3)}],
+                history_id=_hist.id,
             )
 
     # When CMS data is auto-loaded, tell the AI not to request manual verification
@@ -621,14 +629,15 @@ async def generate(
         if oldest:
             db.delete(oldest)
 
-    db.add(ResponseHistory(
+    _hist = ResponseHistory(
         user_id=current_user.id,
         customer_name=parsed_data.customer_name,
         customer_message=request.message,
         parsed_data=parsed_dict,
         generated_response=customer_response or raw_response,
         platform_id=request.platform_id,
-    ))
+    )
+    db.add(_hist)
     haiku_cost = parse_tokens["input"] * _HAIKU_IN + parse_tokens["output"] * _HAIKU_OUT
     sonnet_cost = (
         gen_tokens["input"] * _SONNET_IN
@@ -656,4 +665,5 @@ async def generate(
         faq_sources=faq_sources,
         canned_sources=canned_sources,
         cache_hit=gen_tokens.get("cache_read", 0) > 0,
+        history_id=_hist.id,
     )

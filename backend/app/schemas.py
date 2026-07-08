@@ -133,6 +133,7 @@ class GenerateResponse(BaseModel):
     faq_sources: List[FAQSource] = []
     canned_sources: List[CannedSource] = []
     cache_hit: bool = False
+    history_id: Optional[int] = None
 
 
 # Platform schemas
