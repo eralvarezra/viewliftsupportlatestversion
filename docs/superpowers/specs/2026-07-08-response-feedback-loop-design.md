@@ -16,8 +16,9 @@ similares (similitud por embeddings). Sin calificación, el flujo actual no camb
   (enfoque A). Sin fine-tuning, sin convertir correcciones en canned responses.
 - **Corrección en el queue:** el developer escribe la respuesta correcta completa
   (no notas/reglas sueltas).
-- **Dónde se califica:** en Generate (respuesta recién generada, cubre manual/Freshdesk/
-  Full Automated) y en History (respuestas pasadas).
+- **Dónde se califica:** solo en Generate (respuesta recién generada, cubre manual/
+  Freshdesk/Full Automated). History ya no lista respuestas individuales (hoy es el
+  reporte de agentes), así que no aplica ahí — decidido con Erick el 2026-07-08.
 - **Queue:** página nueva "Review Queue" en el hamburger menu, visible solo superadmin,
   con badge de pendientes.
 
@@ -31,6 +32,11 @@ similares (similitud por embeddings). Sin calificación, el flujo actual no camb
 
 `feedback` ya existe (`'useful'`/`'not_useful'`/NULL) y se reusa tal cual.
 Migración: `ALTER TABLE` directo sobre SQLite (patrón existente del proyecto).
+
+**Persistencia del corpus de aprendizaje:** hoy la historia se poda a diario
+(`_cleanup_old_history` borra lo anterior a hoy) y hay tope de 100 registros por
+usuario/plataforma. Las entradas **calificadas quedan exentas de ambas podas** —
+si no, los ejemplos aprendidos desaparecerían. Las no calificadas se podan igual que hoy.
 
 ## 2. Backend
 
