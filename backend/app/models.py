@@ -90,6 +90,9 @@ class ResponseHistory(Base):
     generated_response = Column(Text, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     feedback = Column(String, nullable=True)  # 'useful', 'not_useful', null
+    message_embedding = Column(LargeBinary, nullable=True)  # embedding of rated message (lazy: set on rating)
+    corrected_response = Column(Text, nullable=True)  # developer's correction from review queue
+    review_status = Column(String, nullable=True)  # for not_useful: 'pending' | 'corrected' | 'dismissed'
     platform_id = Column(Integer, ForeignKey("platforms.id"), nullable=False, server_default="1")
 
     user = relationship("User", back_populates="responses")

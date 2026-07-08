@@ -53,6 +53,15 @@ def run_migrations():
         if "platform_id" not in cols:
             conn.execute(text("ALTER TABLE response_history ADD COLUMN platform_id INTEGER DEFAULT 1"))
 
+        # Feedback-loop columns on response_history
+        cols = [r[1] for r in conn.execute(text("PRAGMA table_info(response_history)")).fetchall()]
+        if "message_embedding" not in cols:
+            conn.execute(text("ALTER TABLE response_history ADD COLUMN message_embedding BLOB"))
+        if "corrected_response" not in cols:
+            conn.execute(text("ALTER TABLE response_history ADD COLUMN corrected_response TEXT"))
+        if "review_status" not in cols:
+            conn.execute(text("ALTER TABLE response_history ADD COLUMN review_status TEXT"))
+
         # Seed platforms and ensure all expected platforms exist
         existing_slugs = {r[0] for r in conn.execute(text("SELECT slug FROM platforms")).fetchall()}
         platforms_to_seed = [
