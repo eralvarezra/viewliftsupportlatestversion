@@ -25,13 +25,27 @@ _SONNET_CACHE_READ  = 0.30  / 1_000_000   # prompt cache read (90% discount)
 
 router = APIRouter()
 
+# Signals that the customer still has an active problem — prevents false "resolved" detection
+_ACTIVE_PROBLEM_INDICATORS = re.compile(
+    r"\b(can'?t|cannot|won'?t|doesn'?t|isn'?t|aren'?t|don'?t|didn'?t|haven'?t|hasn'?t|"
+    r"unable|not working|still\s+(?:not|having|getting)|but\s+(?:i|it|the|my)|"
+    r"however|except|although|please\s+(?:help|fix|email|call|text|contact)|"
+    r"help\s+me|need\s+help|having\s+(?:an?\s+)?(?:issue|problem|trouble)|"
+    r"issue|problem|error|trouble|broken|fails?|failing|freezes?|crash|"
+    r"won'?t\s+(?:load|work|open|play|connect|accept|continue|let|allow|access|show|launch|stream|update|start)|"
+    r"can'?t\s+(?:access|watch|view|stream|log\s+in|sign\s+in|get\s+in|open|load|play)|"
+    r"how\s+(?:can|do)\s+(?:i|we)\s+(?:watch|access|view|get|log|sign)|"
+    r"won'?t\s+let\s+(?:us|me)|app\s+(?:won'?t|doesn'?t)|not\s+(?:letting|allowing))\b",
+    re.IGNORECASE,
+)
+
 _RESOLVED_PATTERNS = re.compile(
     r'\b('
     # Issue is fixed/working
     r'it(?:\'s| is) (?:working|fixed|resolved|fine|good now)|'
     r'(?:problem|issue|it) (?:is |was )?(?:resolved|fixed|solved)|'
     r'(?:works?|working) (?:now|again|fine|great|perfect)|'
-    r'(?:all )?(?:good|great|fine|ok|okay) now|'
+    r'(?:all )?(?:good|great|fine|ok|okay) now(?!\s+the\s+|\s+but|\s+however|\s+\w+\s+(?:won|can|doesn|isn|aren|don|didn|haven|hasn))|'
     # No longer needs support
     r'no longer (?:need|require|want)s? (?:help|support|assistance|this)|'
     r'no longer (?:an? )?issue|'
@@ -163,7 +177,18 @@ def _build_agent_notes(agent_notes: str, cms_account: dict) -> str:
     """Merge agent notes with CMS account data. CMS data overrides billing verification."""
     parts = []
     if cms_account and cms_account.get("found"):
-        lines = ["CMS ACCOUNT DATA (automatically retrieved — treat as CMS screenshot, do NOT output [NEEDS_VERIFICATION]):"]
+        is_subscribed = cms_account.get("is_subscribed", False)
+        sub_status_line = (
+            "SUBSCRIBER STATUS: ACTIVE — has a valid active subscription. Do NOT suggest resubscribing or imply the subscription expired. Do NOT reveal specific plan details (price, renewal date, plan name, auto-renew status) to the customer — only confirm the account is active and address their actual issue."
+            if is_subscribed else
+            "SUBSCRIBER STATUS: INACTIVE — no active subscription found."
+        )
+        lines = [
+            "CMS ACCOUNT DATA (automatically retrieved — treat as CMS screenshot, do NOT output [NEEDS_VERIFICATION]):",
+            f"  {sub_status_line}",
+            "  NOTE: 'COMPLETED' status in ViewLift means the payment cycle completed successfully — the subscription IS active, not expired.",
+            "  NOTE: The 'Payment Handler' below is the REAL payment processor from CMS. If the customer claims they subscribed or cancelled through a different platform (Amazon, Apple, Roku, etc.), the CMS Payment Handler takes precedence.",
+        ]
         m = {
             "Plan Name":          cms_account.get("plan_name") or cms_account.get("plan"),
             "Price":              cms_account.get("price"),
@@ -182,6 +207,60 @@ def _build_agent_notes(agent_notes: str, cms_account: dict) -> str:
         for k, v in m.items():
             if v:
                 lines.append(f"  {k}: {v}")
+        lc = cms_account.get("last_charge") or {}
+        if lc.get("amount"):
+            charge_line = f"  Latest Charge: {lc.get('currency', 'USD')} {lc['amount']}"
+            if lc.get("charge_id"):
+                charge_line += f" (gateway charge {lc['charge_id']})"
+            if lc.get("period_start") and lc.get("period_end"):
+                charge_line += f", billing period {lc['period_start']} to {lc['period_end']}"
+            lines.append(charge_line)
+        if cms_account.get("first_subscribed"):
+            lines.append(f"  First Subscribed: {cms_account['first_subscribed']}")
+        charges = cms_account.get("charges") or []
+        if charges:
+            total = sum(float(c.get("amount") or 0) for c in charges)
+            cur = charges[0].get("currency", "USD")
+            lines.append(
+                f"  Billing History from CMS - {len(charges)} charge(s), total {cur} {total:.2f}:"
+            )
+            for c in charges:
+                lines.append(
+                    f"    {c.get('date', '')} | {c.get('type', '')} {c.get('currency', '')} {c.get('amount', '')} "
+                    f"| {c.get('handler', '')} | {c.get('plan', '')} | {c.get('charge_id', '')}"
+                )
+        qbd = cms_account.get("qoss_by_date") or {}
+        if qbd:
+            lines.append("  Watch Activity on the DATES THE CUSTOMER MENTIONED (QOSS, verified):")
+            for d, sessions in qbd.items():
+                if sessions:
+                    lines.append(f"    {d}: {len(sessions)} streaming session(s) found:")
+                    for q in sessions[:5]:
+                        issues = []
+                        if q.get("failedtostartindicator") == "Y":
+                            issues.append("FAILED TO START")
+                        if q.get("streamdroppedindicator") == "Y":
+                            issues.append("STREAM DROPPED")
+                        br = q.get("bufferingratio") or 0
+                        if br > 0.05:
+                            issues.append(f"buffering {round(br * 100)}%")
+                        lines.append(
+                            f"      {(q.get('watchdate') or '')[:16]} | {(q.get('video') or '')[:60]} | "
+                            f"{q.get('devicename', '')} ({q.get('platform', '')}, {q.get('city', '')}) | "
+                            f"issues: {', '.join(issues) or 'none'}"
+                        )
+                else:
+                    lines.append(f"    {d}: NO streaming sessions found on this date - the user did not stream (or could not stream) that day.")
+        qoss = cms_account.get("qoss")
+        if qoss:
+            lines.append(f"  Recent Watch Activity (QOSS) - last {len(qoss)} streaming sessions:")
+            for q in qoss:
+                lines.append(
+                    f"    {q.get('date', '')} | {q.get('video', '')} | {q.get('device', '')} "
+                    f"({q.get('platform', '')}, {q.get('city', '')}) | playback issues: {q.get('issues', 'none')}"
+                )
+        elif qoss is not None:
+            lines.append("  Recent Watch Activity (QOSS): NONE - this user has not streamed any content recently.")
         parts.append("\n".join(lines))
     if agent_notes and agent_notes.strip():
         parts.append(agent_notes.strip())
@@ -220,8 +299,9 @@ async def generate(
     )
 
     # Step 1b: Detect "issue resolved" messages → return B2C Last Response directly
+    # Only fires if NO active-problem signals exist in the original message
     check_text = f"{request.message} {parsed_data.problem_summary or ''}"
-    if _RESOLVED_PATTERNS.search(check_text):
+    if _RESOLVED_PATTERNS.search(check_text) and not _ACTIVE_PROBLEM_INDICATORS.search(request.message):
         last_response = db.query(CannedResponse).filter(
             CannedResponse.title == "B2C Last Response"
         ).first()
@@ -245,23 +325,40 @@ async def generate(
 
     # Step 1c: No CMS account found at all -> return "B2C No account associated with email"
     # Skip if this canned response was already sent in the thread
-    # Also skip if the customer is just asking about subscriptions (no existing account implied)
+    # Skip only if message is clearly a prospect inquiry (no existing account)
     _no_acct_phrase = "do not see an account associated with"
-    _acct_ownership_phrases = [
-        "my account", "my subscription", "i subscribed", "i signed up",
-        "i was charged", "my payment", "my email", "i have an account",
-        "cancel my", "my plan", "renew my", "my renewal", "my purchase",
-        "i purchased", "i bought", "my order", "my billing", "charged me",
-        "charge on my", "deducted", "debit", "i paid",
+    _prospect_phrases = [
+        "will there be", "will you be", "would there be", "will you offer",
+        "is there a discount", "is there a promo", "any discount", "any promo",
+        "annual subscription", "annual plan", "yearly plan", "yearly subscription",
+        "how much does", "how much is", "what is the price", "what's the price",
+        "interested in subscribing", "thinking about subscribing", "want to subscribe",
+        "can i subscribe", "how do i subscribe", "how can i subscribe",
+        "looking to subscribe", "looking to sign up",
     ]
-    _implies_existing_account = any(p in request.message.lower() for p in _acct_ownership_phrases)
-    if request.cms_not_found and parsed_data.ticket_type == "billing" and _no_acct_phrase not in request.message.lower() and _implies_existing_account:
+    _is_prospect_inquiry = any(p in request.message.lower() for p in _prospect_phrases)
+    import logging as _logging
+    _logging.getLogger("uvicorn").warning(
+        f"[STEP1C] cms_not_found={request.cms_not_found} ticket_type={parsed_data.ticket_type} "
+        f"is_prospect={_is_prospect_inquiry} no_acct_phrase_in_msg={_no_acct_phrase in request.message.lower()}"
+    )
+    if request.cms_not_found and parsed_data.ticket_type == "billing" and _no_acct_phrase not in request.message.lower() and not _is_prospect_inquiry and not bool(request.agent_notes and request.agent_notes.strip()):
         no_acct = db.query(CannedResponse).filter(
             CannedResponse.title == "B2C No account associated with email"
         ).first()
         if no_acct:
             no_acct_text = _format_canned_content(no_acct.content)
             acct_email = (request.cms_account or {}).get("email") or (parsed_data.customer_email or "")
+            # Name every email we checked so the customer can give us the registered one
+            _checked = [e for e in (request.checked_emails or []) if e]
+            if _checked:
+                _uniq = list(dict.fromkeys(e.lower() for e in _checked))
+                _list = " and ".join(_uniq)
+                _plural = "es" if len(_uniq) > 1 else ""
+                no_acct_text = no_acct_text.replace(
+                    "the email address or phone number you provided",
+                    f"the email address{_plural} you provided ({_list})",
+                )
             no_acct_text = no_acct_text.replace("{{ticket.requester.email}}", acct_email)
             no_acct_text = _fix_bold(no_acct_text)
             no_acct_text = _ensure_signatures(no_acct_text, parsed_data.customer_name)
@@ -289,7 +386,8 @@ async def generate(
     _no_sub_sent_email = _no_sub_match.group(1).lower() if _no_sub_match else None
     _current_cms_email = ((request.cms_account or {}).get("email") or "").lower()
     _no_sub_already_sent = bool(_no_sub_sent_email and _current_cms_email and _no_sub_sent_email == _current_cms_email)
-    if request.cms_no_subscription and parsed_data.ticket_type == "billing" and not _no_sub_already_sent:
+    _early_has_agent_notes = bool(request.agent_notes and request.agent_notes.strip())
+    if request.cms_no_subscription and parsed_data.ticket_type == "billing" and not _no_sub_already_sent and not _early_has_agent_notes:
         no_sub = db.query(CannedResponse).filter(
             CannedResponse.title == "B2C No Subscription"
         ).first()
@@ -393,10 +491,14 @@ async def generate(
         db=db,
     )
     _BILLING_ONLY_CANNED = {"B2C No account associated with email", "B2C No Subscription"}
+    _has_agent_notes = bool(request.agent_notes and request.agent_notes.strip())
+    import logging as _lg; _lg.getLogger("uvicorn.error").warning(
+        f"[DBG] agent_notes={repr(request.agent_notes)[:80]} has_notes={_has_agent_notes} canned={len(canned_matches)}")
     if canned_matches:
         # Step 5d-shortcut: high-similarity canned response on technical ticket -> return directly
         top_title, top_content, top_score = canned_matches[0]
-        if top_score >= 0.88 and parsed_data.ticket_type not in ("billing",) and top_title not in _BILLING_ONLY_CANNED:
+        if (top_score >= 0.88 and parsed_data.ticket_type not in ("billing",)
+                and top_title not in _BILLING_ONLY_CANNED and not _has_agent_notes):
             top_content = _format_canned_content(top_content)
             top_content = _fix_bold(top_content)
             top_content = _ensure_signatures(top_content, parsed_data.customer_name)
@@ -415,13 +517,37 @@ async def generate(
                 canned_sources=[{"title": top_title, "similarity": round(top_score, 3)}],
             )
 
+    # When CMS data is auto-loaded, tell the AI not to request manual verification
+    _cms_found = bool(request.cms_account and request.cms_account.get("found"))
+    if _cms_found:
+        cms_bypass = (
+            "CMS ALREADY VERIFIED: Account data has been automatically retrieved and is available "
+            "in the agent instructions above. Do NOT output [NEEDS_VERIFICATION] and do NOT ask "
+            "for a CMS screenshot — treat this as BILLING CASE B (CMS data already provided)."
+        )
+        faq_context = (cms_bypass + "\n\n" + faq_context).strip()
+
     canned_sources = []
     if canned_matches:
-        canned_block = "CANNED RESPONSES (use these verbatim when applicable — highest priority):\n"
+        has_agent_notes = _has_agent_notes
         for title, content, score in canned_matches:
-            canned_block += f"\n[{title}]\n{content}\n"
             canned_sources.append({"title": title, "similarity": round(score, 3)})
-        faq_context = (canned_block + "\n\n" + faq_context).strip()
+        # When agent notes exist, exclude canned template and inject a hard override
+        # so the billing/technical prompt does not fall back to its default template.
+        if has_agent_notes:
+            override_instruction = (
+                "CRITICAL — AGENT OVERRIDE ACTIVE:\n"
+                "Do NOT use any standard billing/technical troubleshooting template.\n"
+                "Do NOT ask for verification details, payment info, or next steps.\n"
+                "Write a professional customer-facing email that conveys ONLY what the agent\n"
+                "specified in the PRIORITY 0 override instructions. Keep greeting and signature."
+            )
+            faq_context = (override_instruction + "\n\n" + faq_context).strip()
+        else:
+            canned_block = "CANNED RESPONSES (use these verbatim when applicable — highest priority):\n"
+            for title, content, score in canned_matches:
+                canned_block += f"\n[{title}]\n{content}\n"
+            faq_context = (canned_block + "\n\n" + faq_context).strip()
 
     # account_number is excluded from billing context to prevent the model from
     # using it to infer payment handler (e.g. "apple-xxx" prefix is a CMS artifact, not Apple billing)
@@ -432,10 +558,27 @@ async def generate(
         "problem_summary": parsed_data.problem_summary,
         "context": parsed_data.context,
         "ticket_type": parsed_data.ticket_type,
-        "payment_handler": parsed_data.payment_handler,
     }
     if parsed_data.ticket_type != "billing":
         parsed_dict["account_number"] = parsed_data.account_number
+
+    # payment_handler comes EXCLUSIVELY from CMS — never from the customer's message.
+    # Without CMS data the field is omitted entirely so the AI cannot assume a processor.
+    _cms_ph = ((request.cms_account or {}).get("payment_handler") or "").strip()
+    if _cms_ph:
+        parsed_dict["payment_handler"] = f"{_cms_ph} (verified from CMS)"
+
+    # QOSS for the specific dates the customer mentioned (verifies claims like
+    # "couldn't watch the game on July 3" against real streaming activity)
+    _incident_dates = [d for d in (parsed_data.incident_dates or []) if isinstance(d, str) and len(d) == 10]
+    _cms_uid = (request.cms_account or {}).get("user_id")
+    _cms_site = (request.cms_account or {}).get("site")
+    if _cms_found and _incident_dates and _cms_uid and _cms_site:
+        try:
+            from app.routes.cms import fetch_qos_for_dates
+            request.cms_account["qoss_by_date"] = fetch_qos_for_dates(_cms_uid, _incident_dates, db, site=_cms_site)
+        except Exception:
+            pass
 
     raw_response, gen_tokens = claude.generate_response(
         parsed_dict,
@@ -445,10 +588,12 @@ async def generate(
         platform_name=platform_name,
         cms_url=cms_url,
         agent_notes=_build_agent_notes(request.agent_notes, request.cms_account),
-        override_rules=bool(request.cms_account) or request.override_rules,
+        override_rules=bool(request.agent_notes and request.agent_notes.strip()) or request.override_rules,
     )
     customer_response, next_steps, bot_notes, needs_verification = _parse_response_sections(raw_response)
     if customer_response:
+        # Strip trailing separator lines (---, ___, ***, ===) the model adds before [NEXT STEPS]
+        customer_response = re.sub(r'(\n[ \t]*[-_*=]{3,}[ \t]*)+\s*$', '', customer_response).strip()
         customer_response = _fix_bold(customer_response)
         customer_response = _ensure_signatures(customer_response, parsed_data.customer_name)
     elif not needs_verification:

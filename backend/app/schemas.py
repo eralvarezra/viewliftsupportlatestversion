@@ -1,7 +1,7 @@
 # backend/app/schemas.py
 from datetime import datetime
 from typing import Optional, List, Any
-from pydantic import BaseModel, ConfigDict, EmailStr
+from pydantic import BaseModel, ConfigDict, EmailStr, field_validator
 
 
 # Auth schemas
@@ -86,6 +86,7 @@ class GenerateRequest(BaseModel):
     cms_account: Optional[dict] = None
     cms_not_found: bool = False
     cms_no_subscription: bool = False
+    checked_emails: Optional[List[str]] = None
 
 
 class ParsedData(BaseModel):
@@ -97,6 +98,19 @@ class ParsedData(BaseModel):
     context: Optional[str] = None
     payment_handler: Optional[str] = None
     ticket_type: Optional[str] = None  # "technical" | "billing"
+    incident_dates: Optional[list] = None  # dates the customer says the problem occurred (YYYY-MM-DD)
+
+    @field_validator(
+        "customer_name", "customer_email", "account_number", "device",
+        "problem_summary", "context", "payment_handler", "ticket_type",
+        mode="before",
+    )
+    @classmethod
+    def _coerce_list_to_str(cls, v):
+        # The parser model occasionally returns a list where a string is expected.
+        if isinstance(v, list):
+            return ", ".join(str(x) for x in v if x is not None) or None
+        return v
 
 
 class FAQSource(BaseModel):

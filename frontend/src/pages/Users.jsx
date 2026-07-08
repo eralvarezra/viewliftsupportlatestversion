@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import Layout from '../components/Layout'
 import client from '../api/client'
 import toast from 'react-hot-toast'
@@ -7,6 +7,14 @@ const STATUS_CONFIG = {
   active:   { label: 'Active',   bg: 'bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300' },
   pending:  { label: 'Pending',  bg: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-300' },
   inactive: { label: 'Inactive', bg: 'bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300' },
+}
+
+const FD_BASE = 'https://viewlift.freshdesk.com/a/tickets/'
+
+function todayLocal() {
+  const now = new Date()
+  const pad = (n) => String(n).padStart(2, '0')
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`
 }
 
 function GoalBar({ today, goal }) {
@@ -25,6 +33,63 @@ function GoalBar({ today, goal }) {
   )
 }
 
+function TicketPanel({ userId, date }) {
+  const [tickets, setTickets] = useState(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    setLoading(true)
+    client.get(`/users/${userId}/tickets`, { params: { date } })
+      .then(r => setTickets(r.data))
+      .catch(() => setTickets([]))
+      .finally(() => setLoading(false))
+  }, [userId, date])
+
+  if (loading) {
+    return (
+      <div className="flex items-center gap-2 py-3 px-4 text-sm text-gray-400">
+        <svg className="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
+          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+        </svg>
+        Loading tickets…
+      </div>
+    )
+  }
+
+  if (!tickets || tickets.length === 0) {
+    return (
+      <div className="py-3 px-4 text-sm text-gray-400 dark:text-gray-500 italic">
+        No tickets tracked on {date}
+      </div>
+    )
+  }
+
+  return (
+    <div className="divide-y divide-gray-100 dark:divide-gray-700/50">
+      {tickets.map((t) => {
+        const time = new Date(t.worked_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        return (
+          <div key={t.id} className="flex items-center gap-3 px-4 py-2 hover:bg-gray-50 dark:hover:bg-gray-700/30 transition-colors">
+            <span className="text-xs text-gray-400 dark:text-gray-500 w-14 flex-shrink-0">{time}</span>
+            <a
+              href={t.ticket_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-sm font-medium text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1"
+            >
+              #{t.ticket_id}
+              <svg className="w-3 h-3 opacity-60" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+              </svg>
+            </a>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 export default function Users() {
   const [users, setUsers] = useState([])
   const [loading, setLoading] = useState(true)
@@ -34,6 +99,8 @@ export default function Users() {
   const [confirmDelete, setConfirmDelete] = useState(null)
   const [fdEnabled, setFdEnabled] = useState(true)
   const [fdToggling, setFdToggling] = useState(false)
+  const [expandedUser, setExpandedUser] = useState(null)
+  const [ticketDate, setTicketDate] = useState(todayLocal())
 
   const fetchUsers = async () => {
     try {
@@ -52,6 +119,10 @@ export default function Users() {
       setFdEnabled(r.data?.freshdesk_on_generate !== 'false')
     }).catch(() => {})
   }, [])
+
+  const toggleExpand = (userId) => {
+    setExpandedUser(prev => prev === userId ? null : userId)
+  }
 
   const cycleStatus = async (user) => {
     setActionLoading(`status-${user.id}`)
@@ -176,6 +247,25 @@ export default function Users() {
           </div>
         </div>
 
+        {/* Date picker for ticket view */}
+        <div className="mb-4 flex items-center gap-3">
+          <span className="text-sm text-gray-500 dark:text-gray-400">Viewing tickets for:</span>
+          <input
+            type="date"
+            value={ticketDate}
+            onChange={e => setTicketDate(e.target.value)}
+            className="border border-gray-300 dark:border-gray-600 rounded-md px-3 py-1.5 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+          {ticketDate !== todayLocal() && (
+            <button
+              onClick={() => setTicketDate(todayLocal())}
+              className="text-xs text-blue-600 hover:underline"
+            >
+              Back to today
+            </button>
+          )}
+        </div>
+
         {/* User Cards */}
         <div className="space-y-4">
           {users.map(user => {
@@ -183,6 +273,7 @@ export default function Users() {
             const isAdmin = user.role === 'admin'
             const busy = actionLoading === `status-${user.id}`
             const deleting = actionLoading === `delete-${user.id}`
+            const isExpanded = expandedUser === user.id
 
             return (
               <div
@@ -220,11 +311,23 @@ export default function Users() {
                   <div className="lg:col-span-1">
                     <div className="text-xs text-gray-400 dark:text-gray-500 mb-2 font-medium uppercase tracking-wide">Today's Progress</div>
                     <GoalBar today={user.tracked_today} goal={user.daily_goal} />
-                    <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                      Total tickets: <span className="font-medium text-gray-700 dark:text-gray-300">{user.ticket_count}</span>
+                    <div className="mt-1.5 flex items-center gap-2">
+                      <button
+                        onClick={() => toggleExpand(user.id)}
+                        className="text-xs text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1"
+                      >
+                        {user.tracked_today} tracked today
+                        <svg
+                          className={`w-3 h-3 transition-transform ${isExpanded ? 'rotate-180' : ''}`}
+                          fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                        >
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                        </svg>
+                      </button>
                     </div>
-                    <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                      Bot usage: <span className="font-medium text-gray-700 dark:text-gray-300">${(user.monthly_cost || 0).toFixed(4)} this month</span>
+                    <div className="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                      Total: <span className="font-medium text-gray-700 dark:text-gray-300">{user.ticket_count}</span>
+                      {' · '}Bot: <span className="font-medium">${(user.monthly_cost || 0).toFixed(4)}</span>
                     </div>
                   </div>
 
@@ -257,7 +360,6 @@ export default function Users() {
 
                   {/* Actions */}
                   <div className="flex items-center space-x-2 justify-end">
-                    {/* Joined / Last login */}
                     <div className="text-xs text-gray-400 dark:text-gray-500 mr-auto space-y-0.5">
                       <div>Joined {new Date(user.created_at).toLocaleDateString()}</div>
                       <div>
@@ -277,14 +379,12 @@ export default function Users() {
                             ? 'bg-purple-50 text-purple-700 hover:bg-purple-100 border-purple-200 dark:bg-purple-900/20 dark:text-purple-400 dark:border-purple-700'
                             : 'bg-gray-50 text-gray-600 hover:bg-gray-100 border-gray-200 dark:bg-gray-700 dark:text-gray-300 dark:border-gray-600'
                         }`}
-                        title={isAdmin ? 'Revoke admin access' : 'Grant admin access'}
                       >
                         {actionLoading === `role-${user.id}` ? '...' : isAdmin ? 'Revoke Admin' : 'Make Admin'}
                       </button>
                     )}
                     {!isAdmin && (
                       <>
-                        {/* Status cycle button */}
                         <button
                           onClick={() => cycleStatus(user)}
                           disabled={busy}
@@ -299,21 +399,13 @@ export default function Users() {
                           {busy ? '...' : user.status === 'pending' ? 'Approve' : user.status === 'active' ? 'Deactivate' : 'Reactivate'}
                         </button>
 
-                        {/* Delete */}
                         {confirmDelete === user.id ? (
                           <div className="flex items-center space-x-1">
                             <span className="text-xs text-red-600 dark:text-red-400">Confirm?</span>
-                            <button
-                              onClick={() => deleteUser(user)}
-                              disabled={deleting}
-                              className="px-2 py-1 text-xs bg-red-600 text-white rounded hover:bg-red-700 disabled:opacity-50"
-                            >
+                            <button onClick={() => deleteUser(user)} disabled={deleting} className="px-2 py-1 text-xs bg-red-600 text-white rounded hover:bg-red-700 disabled:opacity-50">
                               {deleting ? '...' : 'Yes'}
                             </button>
-                            <button
-                              onClick={() => setConfirmDelete(null)}
-                              className="px-2 py-1 text-xs bg-gray-200 dark:bg-gray-600 text-gray-700 dark:text-gray-300 rounded hover:bg-gray-300"
-                            >
+                            <button onClick={() => setConfirmDelete(null)} className="px-2 py-1 text-xs bg-gray-200 dark:bg-gray-600 text-gray-700 dark:text-gray-300 rounded hover:bg-gray-300">
                               No
                             </button>
                           </div>
@@ -329,6 +421,18 @@ export default function Users() {
                     )}
                   </div>
                 </div>
+
+                {/* Expandable ticket list */}
+                {isExpanded && (
+                  <div className="border-t border-gray-100 dark:border-gray-700 bg-gray-50/50 dark:bg-gray-700/20 rounded-b-xl">
+                    <div className="flex items-center justify-between px-4 py-2 border-b border-gray-100 dark:border-gray-700/50">
+                      <span className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">
+                        Tracked tickets · {ticketDate}
+                      </span>
+                    </div>
+                    <TicketPanel userId={user.id} date={ticketDate} />
+                  </div>
+                )}
               </div>
             )
           })}

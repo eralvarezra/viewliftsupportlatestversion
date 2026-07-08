@@ -21,11 +21,15 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-SCHN_XAPIKEY   = "ebd65e9d-e9ab-4aaf-a78c-0d14b74cf1be"
-SCHN_CLIENT_ID  = "3635b621-15b8-46c6-b20f-923e10be7ec4"
-SCHN_SITE       = "schn"
-ALTITUD_XAPIKEY = "69f0e740-7ef2-418b-a9de-c3aded2461fc"
-ALTITUD_SITE    = "altitude"
+SCHN_XAPIKEY      = "ebd65e9d-e9ab-4aaf-a78c-0d14b74cf1be"
+SCHN_CLIENT_ID    = "3635b621-15b8-46c6-b20f-923e10be7ec4"
+SCHN_SITE         = "schn"
+ALTITUD_XAPIKEY   = "69f0e740-7ef2-418b-a9de-c3aded2461fc"
+ALTITUD_SITE      = "altitude"
+DIRTVISION_XAPIKEY = "FGtQFMG1Fd7DpPUfzoQ5U8FIQo51xT8d9tkbECKE"
+DIRTVISION_SITE   = "dirtvision"
+MSN_XAPIKEY       = "eDDgMPynXA8W2YeB5b0qe9KtnsuKP96W8aBWQCEF"
+MSN_SITE          = "monumentalsportsnetwork"
 CMS_GRAPHQL     = "https://cms.api.viewlift.com/management/graphql"
 CMS_INVOKE      = "https://cms.api.viewlift.com/v3.0/invoke"
 CMS_LOGIN_URL   = "https://cms.api.viewlift.com/v3.0/user/auth/login"
@@ -36,8 +40,10 @@ DEVICE_ID       = "browser-427558fc-49f6-44fb-9bfc-96fedb7e5a97"
 TIMEOUT         = 10
 
 _CMS_CONFIGS = {
-    "schn":     {"xapikey": SCHN_XAPIKEY,    "site": SCHN_SITE,    "client_id": SCHN_CLIENT_ID},
-    "altitude": {"xapikey": ALTITUD_XAPIKEY, "site": ALTITUD_SITE, "client_id": None},
+    "schn":       {"xapikey": SCHN_XAPIKEY,       "site": SCHN_SITE,       "client_id": SCHN_CLIENT_ID},
+    "altitude":   {"xapikey": ALTITUD_XAPIKEY,    "site": ALTITUD_SITE,    "client_id": None},
+    "dirtvision": {"xapikey": DIRTVISION_XAPIKEY, "site": DIRTVISION_SITE, "client_id": None},
+    "monumental":  {"xapikey": MSN_XAPIKEY,        "site": MSN_SITE,        "client_id": None},
 }
 
 def _cfg(site: str) -> dict:
@@ -381,7 +387,7 @@ def cms_lookup(
     token = _get_stored_token(db, site=site)
     if not token:
         return {"found": False, "email": email, "token_error": True}
-    data = fetch_cms_data(email, db, include_qos=False, site=site)
+    data = fetch_cms_data(email, db, include_qos=True, site=site)
     if not data:
         return {"found": False, "email": email}
     acct = data.get("account", {})
@@ -392,6 +398,7 @@ def cms_lookup(
 
     return {
         "found": True,
+        "site": site,
         "user_id": data.get("user_id"),
         "email": acct.get("email") or email,
         "name": acct.get("name", ""),
@@ -411,6 +418,42 @@ def cms_lookup(
         "end_date": (sub_info.get("subscriptionEndDate") or "")[:10],
         "auto_renew": sub_info.get("autoRenewStatus", False),
         "last_login": (acct.get("lastLoginDate") or "")[:10],
+        "first_subscribed": (sub_info.get("addedDate") or "")[:10],
+        "last_charge": {
+            "amount": sub_info.get("totalAmount") or sub_info.get("planAmount") or "",
+            "currency": currency,
+            "charge_id": sub_info.get("gatewayChargeId") or "",
+            "period_start": (sub_info.get("subscriptionStartDate") or "")[:10],
+            "period_end": (sub_info.get("subscriptionEndDate") or "")[:10],
+        },
+        "charges": [
+            {
+                "date": (c.get("initiatedAt") or c.get("addedDate") or "")[:10],
+                "type": c.get("transactiontype", ""),
+                "amount": c.get("totalAmount") or c.get("preTaxAmount") or "",
+                "currency": c.get("currencyCode", "USD"),
+                "handler": c.get("paymentHandler", ""),
+                "plan": (c.get("planTitle") or c.get("identifier") or "")[:40],
+                "charge_id": c.get("gatewayChargeId") or c.get("id") or "",
+            }
+            for c in (data.get("billing") or [])[:24]
+        ],
+        "qoss": [
+            {
+                "date": (q.get("watchdate") or "")[:16],
+                "video": (q.get("video") or "")[:80],
+                "platform": q.get("platform", ""),
+                "device": q.get("devicename", ""),
+                "city": q.get("city", ""),
+                "issues": ", ".join(filter(None, [
+                    "failed to start" if q.get("failedtostartindicator") == "Y" else "",
+                    "stream dropped" if q.get("streamdroppedindicator") == "Y" else "",
+                    "buffering {}%".format(round((q.get("bufferingratio") or 0) * 100))
+                    if (q.get("bufferingratio") or 0) > 0.05 else "",
+                ])) or "none",
+            }
+            for q in (data.get("qos") or [])[:5]
+        ],
         "device_count": len(data.get("devices", [])),
         "devices": [
             {
@@ -470,6 +513,15 @@ def fetch_cms_data(email: str, db: Session, include_qos: bool = True, user_id: O
             "query": {"site": site_slug, "userId": user_id, "limit": 100},
         }, headers=cms_headers, timeout=TIMEOUT).json()
 
+    def _billing():
+        r = http_requests.post(CMS_INVOKE, json={
+            "url": "/v3/billing/history", "method": "GET", "role": "Customer Support",
+            "auth": {"site": site_slug, "userId": user_id}, "body": {},
+            "query": {"site": site_slug, "limit": 50, "offset": 0, "purchaseType": "SUBSCRIPTION"},
+        }, headers=cms_headers, timeout=TIMEOUT)
+        data = r.json()
+        return data.get("records", []) if isinstance(data, dict) else []
+
     def _qos():
         qos_headers = {"Content-Type": "application/json", "xapikey": xapikey, "authorization": token}
         today = datetime.utcnow().strftime("%Y-%m-%d")
@@ -480,7 +532,7 @@ def fetch_cms_data(email: str, db: Session, include_qos: bool = True, user_id: O
         data = resp.json()
         return data if isinstance(data, list) else []
 
-    tasks = {"identity": _identity, "devices": _devices}
+    tasks = {"identity": _identity, "devices": _devices, "billing": _billing}
     if include_qos and client_id:
         tasks["qos"] = _qos
 
@@ -499,6 +551,7 @@ def fetch_cms_data(email: str, db: Session, include_qos: bool = True, user_id: O
         "account": results.get("identity", {}),
         "devices": results.get("devices", {}).get("records", []),
         "qos": results.get("qos", []),
+        "billing": results.get("billing") or [],
     }
 
 
@@ -562,3 +615,30 @@ Recent Streaming Sessions ({len(qos)} records):")
 
     lines.append("=== END CMS DATA ===")
     return "\n".join(lines)
+
+
+def fetch_qos_for_dates(user_id: str, dates: list, db: Session, site: str = "schn") -> dict:
+    """QOS streaming sessions for the specific dates a customer mentioned.
+
+    Returns {date: [session, ...]}; empty list means no activity that day.
+    """
+    from datetime import timedelta
+
+    token = _get_stored_token(db, site=site)
+    cfg = _cfg(site)
+    if not token or not cfg.get("client_id"):
+        return {}
+    qos_headers = {"Content-Type": "application/json", "xapikey": cfg["xapikey"], "authorization": token}
+    out = {}
+    for d in dates[:5]:
+        try:
+            nxt = (datetime.fromisoformat(d) + timedelta(days=1)).strftime("%Y-%m-%d")
+            resp = http_requests.post(QOS_URL, json={
+                "filters": {"clientId": cfg["client_id"], "userId": user_id, "watchDate": nxt,
+                            "numRecords": "50", "skipRecords": 0, "sortKey": "DESC", "inclusive": "N"},
+            }, headers=qos_headers, timeout=TIMEOUT)
+            data = resp.json()
+            out[d] = [q for q in data if (q.get("watchdate") or "").startswith(d)] if isinstance(data, list) else []
+        except Exception:
+            out[d] = []
+    return out

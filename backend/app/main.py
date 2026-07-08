@@ -12,6 +12,7 @@ from app.routes.insights import router as insights_router
 from app.routes.platforms import router as platforms_router
 from app.routes.ticket_tracker import router as ticket_tracker_router
 from app.routes.harvest import router as harvest_router
+from app.routes.csat import router as csat_router
 from app.routes.daily_update import router as daily_update_router
 from app.routes.reports import router as reports_router
 
@@ -68,4 +69,5 @@ from app.routes.cms import router as cms_router
 app.include_router(canned_responses_router, prefix="/api/canned-responses", tags=["canned-responses"])
 app.include_router(cms_router, prefix="/api/cms", tags=["cms"])
 app.include_router(harvest_router, prefix="/api/harvest", tags=["harvest"])
+app.include_router(csat_router, prefix="/api/csat", tags=["csat"])
 

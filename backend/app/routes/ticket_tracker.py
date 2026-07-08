@@ -52,7 +52,9 @@ async def get_ticket_stats(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).replace(tzinfo=None)
+    from datetime import timedelta
+    tz_cr = timezone(timedelta(hours=-6))
+    today_start = datetime.now(tz_cr).replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc).replace(tzinfo=None)
     today_count = (
         db.query(func.count(TicketLog.id))
         .filter(TicketLog.user_id == current_user.id, TicketLog.worked_at >= today_start)

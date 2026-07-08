@@ -153,3 +153,18 @@ class CannedResponse(Base):
     synced_at = Column(DateTime, default=datetime.utcnow)
 
     platform = relationship("Platform")
+
+
+class AutomatedClaim(Base):
+    __tablename__ = "automated_claims"
+
+    id = Column(Integer, primary_key=True, index=True)
+    ticket_id = Column(Integer, unique=True, index=True, nullable=False)
+    claimed_by = Column(Integer, nullable=True)
+    claimed_by_name = Column(String, nullable=True)
+    subject = Column(String, nullable=True)
+    platform = Column(String, nullable=True)
+    url = Column(String, nullable=True)
+    status = Column(String, default="working")  # working|sent|skipped|released|expired
+    claimed_at = Column(DateTime, default=datetime.utcnow)
+    expires_at = Column(DateTime, nullable=True)

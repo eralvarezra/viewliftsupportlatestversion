@@ -64,12 +64,12 @@ export default function Header() {
 
   const navLinks = [
     { to: '/generate', label: 'Generate' },
-    { to: '/history', label: 'History' },
+    { to: '/history', label: 'B2C Responses' },
     { to: '/tracker', label: 'Tracker' },
     { to: '/insights', label: 'Daily Update' },
     ...(isAdmin && user?.is_superadmin ? [
       { to: '/reports', label: 'Reports' },
-      { to: '/open-tickets', label: 'Open Tickets' },
+      { to: '/open-tickets', label: 'CSAT Analysis' },
     ] : []),
   ]
 

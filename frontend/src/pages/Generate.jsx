@@ -14,6 +14,41 @@ function fileToBase64(file) {
   })
 }
 
+
+const SUPPORT_PREFIXES = [
+  'support','techsupport','helpdesk','help','info','admin','noreply',
+  'no-reply','contact','team','service','ticket','feedback','care',
+  'customercare','customersupport','customerservice','billing',
+  'dvsupport','appsupport','donotreply','notifications','mailer',
+]
+// Always return a STRING from an API error — FastAPI 422s put an array of
+// objects in `detail`, and rendering that directly crashes React (error #31).
+function apiErr(err, fallback) {
+  const d = err?.response?.data?.detail
+  if (typeof d === 'string') return d
+  if (Array.isArray(d)) return d.map(x => (x && x.msg) ? x.msg : JSON.stringify(x)).join('; ')
+  if (d && typeof d === 'object') return d.msg || JSON.stringify(d)
+  return fallback
+}
+
+// Whole domains treated as support aliases — any address here triggers the
+// "update contact to the real customer" flow (same as dvsupport@dirtvision.com).
+const SUPPORT_DOMAINS = ['livgolf.com']
+// Replying to these domains is never allowed (internal LIV staff, not customers).
+// The contact must be changed to the real customer first.
+function isBlockedRecipientDomain(email) {
+  if (!email) return false
+  const domain = (email.split('@')[1] || '').toLowerCase()
+  return SUPPORT_DOMAINS.includes(domain)
+}
+function isSupportEmail(email) {
+  if (!email) return false
+  const domain = (email.split('@')[1] || '').toLowerCase()
+  if (SUPPORT_DOMAINS.includes(domain)) return true
+  const prefix = email.split('@')[0].toLowerCase().replace(/[._-]/g, '')
+  return SUPPORT_PREFIXES.some(p => prefix === p || prefix.startsWith(p))
+}
+
 export default function Generate() {
   const [customerMessage, setCustomerMessage] = useState('')
   const [screenshots, setScreenshots] = useState([]) // [{ base64, mediaType, previewUrl }]
@@ -22,10 +57,26 @@ export default function Generate() {
   const [nextSteps, setNextSteps] = useState(null)
   const [botNotes, setBotNotes] = useState(null)
   const [agentNotes, setAgentNotes] = useState("")
-  const [inputMode, setInputMode] = useState('manual') // 'manual' | 'freshdesk'
+  const [inputMode, setInputMode] = useState('manual') // 'manual' | 'freshdesk' | 'automated'
   const [fdInput, setFdInput] = useState('')
+  // Full Automated — shared claim pool (multi-admin auto-assignment)
+  const [autoActive, setAutoActive] = useState(false)
+  const [autoStage, setAutoStage] = useState('idle') // idle|loading|generating|review|done
+  const [autoCurrent, setAutoCurrent] = useState(null) // ticket currently claimed by me
+  const [autoHandled, setAutoHandled] = useState(0)    // tickets I've sent this session
+  const [autoStatus, setAutoStatus] = useState(null)   // live panel data
+  const [autoStarting, setAutoStarting] = useState(false)
+  const autoCurrentRef = useRef(null)
+  const autoActiveRef = useRef(false)
+  const autoPollRef = useRef(null)
+  const autoHeartbeatRef = useRef(null)
+  const autoBusyRef = useRef(false) // prevents overlapping claim attempts
   const [fdTicket, setFdTicket] = useState(null)
   const [fdLoading, setFdLoading] = useState(false)
+  const [showContactModal, setShowContactModal] = useState(false)
+  const [contactForm, setContactForm] = useState({ name: '', email: '' })
+  const [contactSaving, setContactSaving] = useState(false)
+  const [contactError, setContactError] = useState('')
   const [fdRateLimit, setFdRateLimit] = useState(() => {
     try { return JSON.parse(localStorage.getItem('fd_rate_limit') || 'null') } catch { return null }
   })
@@ -51,6 +102,15 @@ export default function Generate() {
   const [showPreview, setShowPreview] = useState(false)
   const [noteImages, setNoteImages] = useState([])
   const [isSending, setIsSending] = useState(false)
+  const [isEditingResponse, setIsEditingResponse] = useState(false)
+  const responseEditRef = useRef(null)
+  const previewEditRef = useRef(null)
+  const [soundEnabled, setSoundEnabled] = useState(() => {
+    try { return localStorage.getItem('ticket_sound') !== 'off' } catch { return true }
+  })
+  const soundEnabledRef = useRef(true)
+  soundEnabledRef.current = soundEnabled
+  const audioCtxRef = useRef(null)
 
   const { activePlatform, platforms, setActivePlatform } = usePlatform()
   const { coverUserId, agents } = useCover()
@@ -59,7 +119,7 @@ export default function Generate() {
   activePlatformRef.current = activePlatform
 
 
-  const CMS_PLATFORM_SITE = { 1: 'schn', 3: 'altitude' }
+  const CMS_PLATFORM_SITE = { 1: 'schn', 3: 'altitude', 10: 'dirtvision', 4: 'monumental' }
 
   const GROUP_TO_PLATFORM_ID = {
     43000666076: 1,   // SCHN Support -> SCHN+
@@ -84,19 +144,26 @@ export default function Generate() {
     }).catch(() => {})
   }, [])
 
-  useEffect(() => {
-    async function loadTracker() {
-      try {
-        const [logsRes, statsRes] = await Promise.all([
-          client.get('/ticket-tracker/'),
-          client.get('/ticket-tracker/stats'),
-        ])
-        setTrackerLogs(logsRes.data)
-        setTrackerStats(statsRes.data)
-      } catch { /* silently ignore */ }
-    }
-    loadTracker()
+  const refreshTracker = useCallback(async () => {
+    try {
+      const [logsRes, statsRes] = await Promise.all([
+        client.get('/ticket-tracker/'),
+        client.get('/ticket-tracker/stats'),
+      ])
+      setTrackerLogs(logsRes.data)
+      setTrackerStats(statsRes.data)
+    } catch { /* silently ignore */ }
   }, [])
+
+  useEffect(() => {
+    refreshTracker()
+    // Light poll so the "Tracker Today" widget stays current without an F5.
+    const iv = setInterval(refreshTracker, 30000)
+    // Also refresh when the tab regains focus (agent comes back to it).
+    const onFocus = () => refreshTracker()
+    window.addEventListener('focus', onFocus)
+    return () => { clearInterval(iv); window.removeEventListener('focus', onFocus) }
+  }, [refreshTracker])
 
   const getTodayLogs = (logs) => {
     const today = new Date().toDateString()
@@ -144,13 +211,18 @@ export default function Generate() {
     Array.from(e.dataTransfer.files).forEach(file => processImageFile(file))
   }, [processImageFile])
 
-  const handleAnalyzeAndGenerate = async () => {
-    if (!customerMessage.trim()) {
-      toast.error('Please enter the message content')
-      return
-    }
+  // Core generate call. Reads from explicit overrides when provided (automated flow),
+  // otherwise from current UI state (manual/freshdesk flow). Returns the response data.
+  const runGenerate = async (opts = {}) => {
+    const message = opts.message ?? customerMessage
+    const platformId = opts.platformId ?? activePlatform.id
+    const cms = opts.cmsInfo !== undefined ? opts.cmsInfo : cmsInfo
+    const altEmails = opts.cmsAltEmails !== undefined ? opts.cmsAltEmails : cmsAltEmails
+    const notes = opts.agentNotes !== undefined ? opts.agentNotes : agentNotes
+    const imgs = opts.skipImages ? [] : screenshots
 
     setIsLoading(true)
+    setIsEditingResponse(false)
     setParsedInfo(null)
     setGeneratedResponse('')
     setNextSteps(null)
@@ -160,14 +232,16 @@ export default function Generate() {
     setCannedSources([])
 
     try {
+      const checkedEmails = [...new Set([fdTicket?.requester_email, ...(altEmails || [])].filter(Boolean).map(e => e.toLowerCase()))]
       const response = await client.post('/generate', {
-        message: customerMessage,
-        platform_id: activePlatform.id,
-        images: screenshots.length > 0 ? screenshots.map(s => ({ base64: s.base64, media_type: s.mediaType })) : null,
-        agent_notes: agentNotes.trim() || null,
-        cms_account: cmsInfo?.found ? cmsInfo : null,
-        cms_not_found: cmsInfo !== null && !cmsInfo?.found && cmsAltEmails.length === 0,
-        cms_no_subscription: !!(cmsInfo?.found && !cmsInfo?.is_subscribed),
+        message,
+        platform_id: platformId,
+        images: imgs.length > 0 ? imgs.map(s => ({ base64: s.base64, media_type: s.mediaType })) : null,
+        agent_notes: (notes || '').trim() || null,
+        cms_account: cms?.found ? cms : null,
+        checked_emails: checkedEmails.length > 0 ? checkedEmails : null,
+        cms_not_found: cms !== null && !cms?.found,
+        cms_no_subscription: !!(cms?.found && !cms?.is_subscribed),
       })
 
       setParsedInfo(response.data.parsed)
@@ -177,17 +251,28 @@ export default function Generate() {
       setNeedsVerification(response.data.needs_verification || false)
       setFaqSources(response.data.faq_sources || [])
       setCannedSources(response.data.canned_sources || [])
+      return response.data
+    } catch (error) {
+      const msg = apiErr(error, 'Failed to generate response. Please try again.')
+      if (!opts.silent) toast.error(msg)
+      return null
+    } finally {
+      setIsLoading(false)
+    }
+  }
 
-      if (response.data.needs_verification) {
+  const handleAnalyzeAndGenerate = async () => {
+    if (!customerMessage.trim()) {
+      toast.error('Please enter the message content')
+      return
+    }
+    const data = await runGenerate()
+    if (data) {
+      if (data.needs_verification) {
         toast('CMS verification required — attach a screenshot to continue', { icon: '⚠️' })
       } else {
         toast.success('Response generated successfully')
       }
-    } catch (error) {
-      const message = error.response?.data?.detail || 'Failed to generate response. Please try again.'
-      toast.error(message)
-    } finally {
-      setIsLoading(false)
     }
   }
 
@@ -198,6 +283,7 @@ export default function Generate() {
     }
 
     setIsRegenerating(true)
+    setIsEditingResponse(false)
 
     try {
       const response = await client.post('/generate', {
@@ -206,7 +292,7 @@ export default function Generate() {
         images: screenshots.length > 0 ? screenshots.map(s => ({ base64: s.base64, media_type: s.mediaType })) : null,
         agent_notes: agentNotes.trim() || null,
         cms_account: cmsInfo?.found ? cmsInfo : null,
-        cms_not_found: cmsInfo !== null && !cmsInfo?.found && cmsAltEmails.length === 0,
+        cms_not_found: cmsInfo !== null && !cmsInfo?.found,
         cms_no_subscription: !!(cmsInfo?.found && !cmsInfo?.is_subscribed),
       })
 
@@ -224,10 +310,25 @@ export default function Generate() {
         toast.success('Response regenerated successfully')
       }
     } catch (error) {
-      const message = error.response?.data?.detail || 'Failed to regenerate response. Please try again.'
+      const message = apiErr(error, 'Failed to regenerate response. Please try again.')
       toast.error(message)
     } finally {
       setIsRegenerating(false)
+    }
+  }
+
+  const saveContact = async () => {
+    if (!contactForm.name.trim() || !contactForm.email.trim()) return
+    setContactSaving(true)
+    setContactError('')
+    try {
+      await client.post(`/freshdesk/ticket/${fdTicket.id}/requester`, contactForm)
+      setShowContactModal(false)
+      loadFdTicket()
+    } catch (e) {
+      setContactError(apiErr(e, 'Error updating contact'))
+    } finally {
+      setContactSaving(false)
     }
   }
 
@@ -310,7 +411,8 @@ export default function Generate() {
     try {
       const r = await client.get(`/freshdesk/ticket/${id}`)
       setFdTicket(r.data)
-      setCustomerMessage(r.data.full_thread || r.data.description)
+      const loadedMessage = r.data.full_thread || r.data.description
+      setCustomerMessage(loadedMessage)
       // Resolve platform — priority: cf_b2b_client_name > group_id > tags
       const CLIENT_NAME_TO_PLATFORM_ID = {
         'schn+': 1, 'altitude': 3, 'dirtvision': 10, 'fox one': 6,
@@ -350,27 +452,109 @@ export default function Generate() {
       updateRateLimit(r.data.rate_limit_remaining, r.data.rate_limit_total)
       const pId = resolvedPlatformId ?? activePlatformRef.current?.id
       const cmsSite = CMS_PLATFORM_SITE[pId]
+      let finalCmsInfo = null
+      let finalAlts = []
       if (cmsSite && r.data.requester_email) {
         setCmsLoading(true)
         const requesterEmail = r.data.requester_email.toLowerCase()
-        client.get(`/cms/lookup?email=${encodeURIComponent(r.data.requester_email)}&site=${cmsSite}`)
-          .then(cr => {
+        try {
+          const cr = await client.get(`/cms/lookup?email=${encodeURIComponent(r.data.requester_email)}&site=${cmsSite}`)
+          {
+            finalCmsInfo = cr.data
             setCmsInfo(cr.data)
             if (!cr.data.found || (cr.data.found && !cr.data.is_subscribed)) {
               const thread = r.data.full_thread || r.data.description || ''
+              const _internalPrefixes = ['support', 'appsupport', 'dvsupport', 'noreply', 'no-reply', 'admin', 'info', 'help', 'billing', 'donotreply', 'do-not-reply', 'notifications', 'mailer', 'bounce']
+              const requesterLocal = requesterEmail.split('@')[0]
               const found = [...new Set(
                 (thread.match(/[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g) || [])
                   .map(e => e.toLowerCase())
-                  .filter(e => e !== requesterEmail)
+                  .filter(e => {
+                    if (e === requesterEmail) return false
+                    const localPart = e.split('@')[0]
+                    const domain = e.split('@')[1] || ''
+                    // Never treat a support-alias domain (e.g. livgolf.com) as the customer
+                    if (SUPPORT_DOMAINS.includes(domain)) return false
+                    // Filter HTML artifact: word concatenated directly before a known email (e.g. "addressjudy...")
+                    if (localPart !== requesterLocal && localPart.endsWith(requesterLocal)) return false
+                    return !_internalPrefixes.some(p => localPart === p || localPart.endsWith(p) || localPart.startsWith(p))
+                  })
               )]
-              setCmsAltEmails(found)
+
+              // Fuzzy case 1: space in local part where second segment starts with digit
+              // e.g. "tchildress 9626@gmail.com" → "tchildress9626@gmail.com"
+              const fuzzyLocal = thread.match(/[a-zA-Z0-9._%+\-]{2,25}\s\d[a-zA-Z0-9._%+\-]{0,15}@[a-zA-Z0-9.\-]+\.[ \t]*[a-zA-Z]{2,6}/g) || []
+              // Fuzzy case 2: space around dot in domain, normal local part
+              // e.g. "swcasey495@gmail. com" → "swcasey495@gmail.com"
+              const fuzzyDomain = thread.match(/[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+[ \t]*\.[ \t]*[a-zA-Z]{2,6}/g) || []
+              const _knownEmails = [requesterEmail, ...found]
+              // Common English words that appear after a real TLD (e.g. "email@gmail.com. Since...")
+              // and get mistakenly captured as TLDs by the fuzzy regex.
+              const _fakeTlds = new Set(['since','with','from','that','this','when','after','and',
+                'but','for','not','are','was','has','had','its','our','you','all','can','been'])
+              const fuzzyClean = [...new Set(
+                [...fuzzyLocal, ...fuzzyDomain]
+                  .map(m => m.replace(/[ \t]+/g, '').toLowerCase())
+                  .filter(m => /^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,6}$/.test(m))
+                  .filter(m => {
+                    // Reject if this is a known real email with extra ".word" appended
+                    if (_knownEmails.some(e => m.startsWith(e + '.'))) return false
+                    // Reject if the TLD is a common English word (punctuation artifact)
+                    const tld = m.split('.').pop()
+                    if (_fakeTlds.has(tld)) return false
+                    if (m === requesterEmail || found.includes(m)) return false
+                    const localPart = m.split('@')[0]
+                    if (localPart !== requesterLocal && localPart.endsWith(requesterLocal)) return false
+                    return !_internalPrefixes.some(p => localPart === p || localPart.endsWith(p) || localPart.startsWith(p))
+                  })
+              )]
+
+              finalAlts = [...found, ...fuzzyClean]
+              setCmsAltEmails(finalAlts)
+              // The requester's own email had no CMS account. Customers often reply
+              // from a different email than the ticket's (or the ticket comes from a
+              // support alias). Try each alt email found in the thread and adopt the
+              // first that resolves in CMS — so both manual and Full Automated flows
+              // generate against the real account.
+              if (finalAlts.length > 0 && !cr.data.found) {
+                for (const alt of finalAlts) {
+                  try {
+                    const ar = await client.get(`/cms/lookup?email=${encodeURIComponent(alt)}&site=${cmsSite}`)
+                    if (ar.data.found) { finalCmsInfo = ar.data; setCmsInfo(ar.data); break }
+                  } catch (_) {}
+                }
+              }
             }
-          })
-          .catch(() => {})
-          .finally(() => setCmsLoading(false))
+          }
+        } catch (_) {
+        } finally {
+          setCmsLoading(false)
+        }
+      } else if (r.data.requester_email && isSupportEmail(r.data.requester_email)) {
+        // Support-alias ticket on a platform without a CMS site (e.g. @livgolf.com):
+        // still surface the real customer email from the thread for the contact change.
+        const thread = r.data.full_thread || r.data.description || ''
+        const requesterEmail = r.data.requester_email.toLowerCase()
+        const _internalPrefixes = ['support', 'appsupport', 'dvsupport', 'noreply', 'no-reply', 'admin', 'info', 'help', 'billing', 'donotreply', 'do-not-reply', 'notifications', 'mailer', 'bounce']
+        finalAlts = [...new Set(
+          (thread.match(/[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g) || [])
+            .map(e => e.toLowerCase())
+            .filter(e => {
+              if (e === requesterEmail) return false
+              const localPart = e.split('@')[0]
+              const domain = e.split('@')[1] || ''
+              if (SUPPORT_DOMAINS.includes(domain)) return false
+              return !_internalPrefixes.some(p => localPart === p || localPart.endsWith(p) || localPart.startsWith(p))
+            })
+        )]
+        setCmsAltEmails(finalAlts)
       }
+      // Chime on manual loads; automated loads chime later when ready for review.
+      if (!autoActiveRef.current) playChime()
+      return { ok: true, id, message: loadedMessage, platformId: pId, cmsInfo: finalCmsInfo, cmsAltEmails: finalAlts }
     } catch (err) {
-      toast.error(err.response?.data?.detail || 'Failed to load ticket')
+      toast.error(apiErr(err, 'Failed to load ticket'))
+      return { ok: false }
     } finally {
       setFdLoading(false)
     }
@@ -415,25 +599,43 @@ export default function Generate() {
 
   const buildCmsNote = (info) => {
     if (!info || !info.found) return ''
-    const lines = []
-    if (info.plan_name || info.plan) lines.push(`Plan Name: ${info.plan_name || info.plan}`)
-    if (info.price)                  lines.push(`Price: ${info.price}`)
-    if (info.subscription_status)    lines.push(`Status: ${info.subscription_status}`)
-    if (info.country)                lines.push(`Country: ${info.country}`)
-    if (info.receipt_id)             lines.push(`Receipt ID: ${info.receipt_id}`)
-    if (info.payment_unique_id)      lines.push(`Payment Unique ID: ${info.payment_unique_id}`)
-    if (info.transaction_id && info.transaction_id !== info.receipt_id) lines.push(`Transaction ID: ${info.transaction_id}`)
-    if (info.payment_handler)        lines.push(`Payment Handler: ${info.payment_handler}`)
-    if (info.registered_on)          lines.push(`Registered On: ${info.registered_on}`)
-    if (info.end_date)               lines.push(`End Date: ${info.end_date}`)
-    return lines.join('\n')
+    const row = (label, value) => value
+      ? `<tr><td style="padding:5px 20px 5px 0;font-weight:600;white-space:nowrap;color:#1f2937;vertical-align:top">${label}</td><td style="padding:5px 0;color:#374151">${value}</td></tr>`
+      : ''
+    const planLabel = info.plan_name || info.plan || ''
+    const rows = [
+      row('Plan Name', planLabel),
+      row('Price', info.price),
+      row('Status', info.subscription_status),
+      row('Country', info.country),
+      row('Receipt ID', info.receipt_id),
+      row('Payment Unique ID', info.payment_unique_id),
+      row('Transaction ID', (info.transaction_id && info.transaction_id !== info.receipt_id) ? info.transaction_id : null),
+      row('Payment Handler', info.payment_handler),
+      row('Registered On', info.registered_on),
+      row('End Date', info.end_date),
+    ].filter(Boolean).join('\n')
+    if (!rows) return ''
+    return `<table style="border-collapse:collapse;font-size:13px;font-family:sans-serif">${rows}</table>`
   }
 
   const handleSendReply = async () => {
     if (!fdTicket?.id || !generatedResponse) return
+    // HARD GUARD: never send a reply whose recipient is a support-alias domain
+    // (e.g. a LIV Golf employee). Force changing the contact to the real customer.
+    if (isBlockedRecipientDomain(fdTicket?.requester_email)) {
+      toast.error(`This ticket's contact is ${fdTicket.requester_email} (an internal LIV address). Change the contact to the customer before sending.`, { duration: 6000 })
+      setShowPreview(false)
+      setContactForm({ name: cmsInfo?.name || parsedInfo?.customer_name || '', email: cmsAltEmails[0] || cmsInfo?.email || parsedInfo?.customer_email || '' })
+      setShowContactModal(true)
+      return
+    }
+    // Use the latest edited HTML from the preview editor (uncontrolled div) so
+    // last-second edits are sent, even before React state catches up.
+    const replyBody = previewEditRef.current ? previewEditRef.current.innerHTML : generatedResponse
     setIsSending(true)
     try {
-      await client.post(`/freshdesk/ticket/${fdTicket.id}/reply`, { body: generatedResponse, ...(coverUserId ? { cover_user_id: coverUserId } : {}) })
+      await client.post(`/freshdesk/ticket/${fdTicket.id}/reply`, { body: replyBody, ...(coverUserId ? { cover_user_id: coverUserId } : {}) })
       const cmsNote = cmsInfo?.found ? buildCmsNote(cmsInfo) : null
       const hasNoteContent = cmsNote || noteImages.length > 0
       if (hasNoteContent) {
@@ -443,22 +645,37 @@ export default function Generate() {
           ...(coverUserId ? { cover_user_id: coverUserId } : {}),
         })
       }
-      // Status update is non-blocking — include ticket type to satisfy Freshdesk field validation
+      // Status update — the backend retries transient Freshdesk 5xx. If it still
+      // fails, warn the agent so they can set the status manually.
+      let statusOk = true
       try {
         const statusPayload = { status: 12 }
         if (fdTicket?.type) statusPayload.type = fdTicket.type
         await client.put(`/freshdesk/ticket/${fdTicket.id}/status`, statusPayload)
       } catch (statusErr) {
-        console.warn('Status update skipped:', statusErr?.response?.data || statusErr.message)
+        statusOk = false
+        console.warn('Status update failed:', statusErr?.response?.data || statusErr.message)
       }
-      // Log reply to tracker
+      // Log reply to tracker, then refresh the widget so the count updates live.
       try { await client.post('/ticket-tracker/log-reply', { ticket_url: 'https://viewlift.freshdesk.com/a/tickets/' + fdTicket.id, ...(coverUserId ? { cover_user_id: coverUserId } : {}) }) } catch (_) {}
-      toast.success('Reply sent — status set to Waiting for End User')
+      refreshTracker()
+      if (statusOk) {
+        toast.success('Reply sent — status set to Waiting on End User')
+      } else {
+        toast('Reply sent, but the status could NOT be set to Waiting on End User — please change it manually.', { icon: '⚠️', duration: 6000 })
+      }
       setShowPreview(false)
       setNoteImages([])
+      const wasAutomated = autoActiveRef.current && autoStage === 'review'
+      const sentTicket = autoCurrentRef.current
       handleClear(true)
+      if (wasAutomated && sentTicket) {
+        try { await client.post('/freshdesk/automated/complete', { ticket_id: sentTicket.id }) } catch (_) {}
+        setAutoHandled(n => n + 1)
+        setTimeout(() => claimAndProcess(), 300)
+      }
     } catch (err) {
-      toast.error(err.response?.data?.detail || 'Failed to send reply')
+      toast.error(apiErr(err, 'Failed to send reply'))
     } finally {
       setIsSending(false)
     }
@@ -476,6 +693,20 @@ export default function Generate() {
       const email = fdTicket?.requester_email || ''
       const fullName = fdTicket?.requester_name || ''
       const firstName = fullName.split(' ')[0] || fullName || 'there'
+
+      // Name every email we actually checked (ticket requester + any alt emails
+      // found in the thread) so the customer knows none of them are registered
+      // and can give us the correct one.
+      const checked = [...new Set([email, ...cmsAltEmails].filter(Boolean).map(e => e.toLowerCase()))]
+      if (checked.length > 0) {
+        const list = checked.join(' and ')
+        const plural = checked.length > 1
+        html = html.replace(
+          'the email address or phone number you provided',
+          `the email address${plural ? 'es' : ''} you provided (${list})`
+        )
+      }
+
       html = html.replaceAll('{{ticket.requester.email}}', email)
       html = html.replaceAll('{{ticket.requester.name}}', fullName)
       html = html.replaceAll('{{requester.name}}', fullName)
@@ -504,7 +735,8 @@ export default function Generate() {
       html = html.replace(/ {5,}/g, '\n\n').replace(/ {3,4}/g, '\n')
 
       // Replace Freshdesk template variables
-      const email = fdTicket?.requester_email || ''
+      // Use CMS lookup email when available (agent may have searched a different email than the requester)
+      const email = cmsInfo?.email || fdTicket?.requester_email || ''
       const fullName = fdTicket?.requester_name || ''
       const firstName = fullName.split(' ')[0] || fullName || 'there'
       html = html.replaceAll('{{ticket.requester.email}}', email)
@@ -527,6 +759,7 @@ export default function Generate() {
   }
 
   const handleClear = (silent = false) => {
+    setIsEditingResponse(false)
     setAgentNotes("")
     setFdTicket(null)
     setFdInput("")
@@ -544,6 +777,180 @@ export default function Generate() {
     setScreenshots([])
     if (!silent) toast.success('Cleared successfully')
   }
+
+  // ── Full Automated — shared claim pool orchestration ────────────────
+  const startAutomated = async () => {
+    // Unlock audio here (this is a real user gesture) so later auto-claim chimes
+    // — which fire without a direct click — aren't blocked by the browser.
+    try {
+      const Ctx = window.AudioContext || window.webkitAudioContext
+      if (Ctx) {
+        if (!audioCtxRef.current) audioCtxRef.current = new Ctx()
+        if (audioCtxRef.current.state === 'suspended') await audioCtxRef.current.resume()
+      }
+    } catch (_) {}
+    setAutoStarting(true)
+    setAutoActive(true)
+    autoActiveRef.current = true
+    setAutoHandled(0)
+    try {
+      await claimAndProcess()
+    } finally {
+      setAutoStarting(false)
+    }
+  }
+
+  // Claim the next available ticket from the shared pool, load it, and generate.
+  // When the pool is empty, enter a 'watching' state and keep monitoring until
+  // a new ticket appears (auto-picked up by the live-status watcher effect).
+  const claimAndProcess = async () => {
+    if (!autoActiveRef.current || autoBusyRef.current) return
+    autoBusyRef.current = true
+    setAutoStage('loading')
+    setAutoCurrent(null)
+    autoCurrentRef.current = null
+    try {
+      let ticket = null
+      try {
+        const r = await client.post('/freshdesk/automated/claim-next')
+        ticket = r.data.ticket
+      } catch (e) {
+        toast.error(apiErr(e, 'Failed to claim next ticket'))
+        setAutoStage('watching')
+        return
+      }
+      if (!ticket) {
+        // Nothing available right now — watch and pick up automatically.
+        setAutoStage('watching')
+        return
+      }
+      setAutoCurrent(ticket)
+      autoCurrentRef.current = ticket
+      const loaded = await loadFdTicket(ticket.url)
+      if (!loaded?.ok) {
+        try { await client.post('/freshdesk/automated/release', { ticket_id: ticket.id, reason: 'stop' }) } catch (_) {}
+        autoBusyRef.current = false
+        return claimAndProcess()
+      }
+      setAutoStage('generating')
+      await runGenerate({
+        message: loaded.message,
+        platformId: loaded.platformId,
+        cmsInfo: loaded.cmsInfo,
+        cmsAltEmails: loaded.cmsAltEmails,
+        agentNotes: '',
+        skipImages: true,
+      })
+      setAutoStage('review')
+    } finally {
+      autoBusyRef.current = false
+    }
+  }
+
+  const stopAutomated = async () => {
+    autoActiveRef.current = false
+    const cur = autoCurrentRef.current
+    if (cur) {
+      try { await client.post('/freshdesk/automated/release', { ticket_id: cur.id, reason: 'stop' }) } catch (_) {}
+    }
+    setAutoActive(false)
+    setAutoStage('idle')
+    setAutoCurrent(null)
+    autoCurrentRef.current = null
+  }
+
+  // Live panel polling + heartbeat while automated mode is active
+  useEffect(() => {
+    if (!autoActive) {
+      if (autoPollRef.current) { clearInterval(autoPollRef.current); autoPollRef.current = null }
+      if (autoHeartbeatRef.current) { clearInterval(autoHeartbeatRef.current); autoHeartbeatRef.current = null }
+      return
+    }
+    const poll = async () => {
+      try { const r = await client.get('/freshdesk/automated/status'); setAutoStatus(r.data) } catch (_) {}
+    }
+    poll()
+    autoPollRef.current = setInterval(poll, 4000)
+    autoHeartbeatRef.current = setInterval(async () => {
+      const cur = autoCurrentRef.current
+      if (cur) { try { await client.post('/freshdesk/automated/heartbeat', { ticket_id: cur.id }) } catch (_) {} }
+    }, 90000)
+    return () => {
+      if (autoPollRef.current) { clearInterval(autoPollRef.current); autoPollRef.current = null }
+      if (autoHeartbeatRef.current) { clearInterval(autoHeartbeatRef.current); autoHeartbeatRef.current = null }
+    }
+  }, [autoActive])
+
+  // Watcher: while idle-watching, auto-claim as soon as a ticket appears in the pool
+  useEffect(() => {
+    if (autoActive && autoStage === 'watching' && !autoBusyRef.current
+        && (autoStatus?.pool_remaining || 0) > 0) {
+      claimAndProcess()
+    }
+  }, [autoStatus, autoStage, autoActive])
+
+  // Populate the editable area once when entering edit mode (uncontrolled — so
+  // background re-renders like the live-pool poll never wipe the admin's edits).
+  useEffect(() => {
+    if (isEditingResponse && responseEditRef.current) {
+      responseEditRef.current.innerHTML = generatedResponse
+      responseEditRef.current.focus()
+    }
+  }, [isEditingResponse])
+
+  // Commit the edited HTML back into state (call before send/copy/close).
+  const commitResponseEdit = () => {
+    if (isEditingResponse && responseEditRef.current) {
+      setGeneratedResponse(responseEditRef.current.innerHTML)
+    }
+  }
+
+  // Populate the preview modal's editable area when it opens (uncontrolled, so
+  // background re-renders never wipe edits made right before sending).
+  useEffect(() => {
+    if (showPreview && previewEditRef.current) {
+      previewEditRef.current.innerHTML = generatedResponse
+    }
+  }, [showPreview])
+
+  // Pleasant two-tone chime (Web Audio — no asset needed). The AudioContext is
+  // unlocked by the click that starts monitoring / loads a ticket.
+  const playChime = () => {
+    if (!soundEnabledRef.current) return
+    try {
+      const Ctx = window.AudioContext || window.webkitAudioContext
+      if (!Ctx) return
+      if (!audioCtxRef.current) audioCtxRef.current = new Ctx()
+      const ctx = audioCtxRef.current
+      if (ctx.state === 'suspended') ctx.resume()
+      const now = ctx.currentTime
+      ;[[880, 0], [1174.66, 0.13]].forEach(([freq, t]) => {
+        const osc = ctx.createOscillator()
+        const gain = ctx.createGain()
+        osc.type = 'sine'
+        osc.frequency.value = freq
+        gain.gain.setValueAtTime(0.0001, now + t)
+        gain.gain.exponentialRampToValueAtTime(0.18, now + t + 0.02)
+        gain.gain.exponentialRampToValueAtTime(0.0001, now + t + 0.28)
+        osc.connect(gain); gain.connect(ctx.destination)
+        osc.start(now + t); osc.stop(now + t + 0.3)
+      })
+    } catch (_) {}
+  }
+
+  const toggleSound = () => {
+    setSoundEnabled(v => {
+      const nv = !v
+      try { localStorage.setItem('ticket_sound', nv ? 'on' : 'off') } catch (_) {}
+      if (nv) { soundEnabledRef.current = true; playChime() } // preview on enable
+      return nv
+    })
+  }
+
+  // Chime when an automated ticket becomes ready for review.
+  useEffect(() => {
+    if (autoActive && autoStage === 'review') playChime()
+  }, [autoStage, autoActive])
 
   return (
     <>
@@ -601,6 +1008,12 @@ export default function Generate() {
                   >
                     Freshdesk Ticket
                   </button>
+                  <button
+                    onClick={() => setInputMode('automated')}
+                    className={`px-3 py-1.5 transition-colors border-l border-gray-200 dark:border-gray-600 ${inputMode === 'automated' ? 'bg-purple-600 text-white' : 'text-purple-500 hover:bg-purple-50 dark:hover:bg-gray-700'}`}
+                  >
+                    ⚡ Full Automated
+                  </button>
                 </div>
               ) : (
                 <span className="text-xs font-medium text-gray-400 dark:text-gray-500">Manual input</span>
@@ -608,9 +1021,97 @@ export default function Generate() {
               <button onClick={handleClear} className="text-sm text-gray-500 hover:text-gray-700 transition-colors">Clear</button>
             </div>
 
-            {/* Freshdesk ticket loader */}
-            {inputMode === 'freshdesk' && (
+            {/* Full Automated control panel */}
+            {inputMode === 'automated' && (
               <div className="mb-4 space-y-3">
+                <div className="p-3 rounded-lg bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-700">
+                  <p className="text-xs text-purple-800 dark:text-purple-300 font-semibold mb-1">⚡ Full Automated — SCHN · Monumental · DirtVision · Altitude</p>
+                  <p className="text-[11px] text-purple-600 dark:text-purple-400 leading-snug">
+                    Shared pool across all admins. Each admin is auto-assigned a different ticket
+                    (Open / Waiting on L1, new customer reply within 5h): it loads, switches client,
+                    generates the response, and waits for your approval. Spam and refund/cancellation
+                    tickets are filtered out for manual review.
+                  </p>
+                </div>
+
+                {!autoActive && (
+                  <button
+                    onClick={startAutomated}
+                    disabled={autoStarting}
+                    className="w-full px-4 py-2.5 bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white text-sm font-semibold rounded-lg transition-colors"
+                  >
+                    {autoStarting ? 'Starting…' : '⚡ Start Monitoring'}
+                  </button>
+                )}
+
+                {autoActive && (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-semibold text-gray-700 dark:text-gray-300">
+                        {`You've sent ${autoHandled} this session`}
+                      </span>
+                      <div className="flex items-center gap-3">
+                        <button onClick={toggleSound} title={soundEnabled ? 'Sound on — click to mute' : 'Sound off — click to enable'} className="text-sm">
+                          {soundEnabled ? '🔊' : '🔇'}
+                        </button>
+                        <button onClick={stopAutomated} className="text-xs text-red-500 hover:text-red-600 font-medium">Stop</button>
+                      </div>
+                    </div>
+
+                    <p className="text-[11px] text-gray-500 dark:text-gray-400">
+                      {autoStage === 'loading' && '⏳ Claiming & loading next ticket…'}
+                      {autoStage === 'generating' && '🤖 Generating response…'}
+                      {autoStage === 'review' && autoCurrent && `👀 Working #${autoCurrent.id} (${autoCurrent.platform}) — review & Send Reply to continue.`}
+                      {autoStage === 'watching' && '🔭 Monitoring — waiting for new tickets. Will claim automatically when one arrives.'}
+                    </p>
+
+                    {/* Live shared-pool panel */}
+                    {autoStatus && (
+                      <div className="p-2 rounded-md bg-gray-50 dark:bg-gray-700/50 border border-gray-200 dark:border-gray-600 space-y-1.5">
+                        <div className="flex items-center justify-between text-[11px]">
+                          <span className="font-semibold text-gray-700 dark:text-gray-300">🟢 Live pool</span>
+                          <span className="text-gray-500 dark:text-gray-400">
+                            {autoStatus.pool_remaining} remaining · {autoStatus.sent_count} sent
+                          </span>
+                        </div>
+                        {autoStatus.active_admins?.length > 0 && (
+                          <div className="space-y-0.5">
+                            <p className="text-[10px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Active admins ({autoStatus.active_admins.length})</p>
+                            {autoStatus.active_admins.map(a => (
+                              <div key={a.id} className="flex items-center gap-1.5 text-[11px] text-gray-600 dark:text-gray-300">
+                                <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${a.ticket_id ? 'bg-green-500' : 'bg-blue-400 animate-pulse'}`} />
+                                <span className="font-medium">{a.name}{a.is_me ? ' (you)' : ''}</span>
+                                {a.ticket_id ? (
+                                  <><span className="text-gray-400">→</span><span className="truncate">working #{a.ticket_id}</span></>
+                                ) : (
+                                  <span className="text-blue-500 dark:text-blue-400">monitoring…</span>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        {autoStatus.flagged?.length > 0 && (
+                          <div className="space-y-0.5 pt-1 border-t border-gray-200 dark:border-gray-600">
+                            <p className="text-[10px] font-semibold text-amber-600 dark:text-amber-400 uppercase tracking-wide">Manual review ({autoStatus.flagged.length})</p>
+                            {autoStatus.flagged.slice(0, 6).map(f => (
+                              <a key={f.id} href={f.url} target="_blank" rel="noreferrer"
+                                className="block text-[11px] text-amber-600 dark:text-amber-400 hover:underline truncate">
+                                #{f.id} · {f.reason} · {f.subject}
+                              </a>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Freshdesk ticket loader */}
+            {(inputMode === 'freshdesk' || inputMode === 'automated') && (
+              <div className="mb-4 space-y-3">
+                {inputMode === 'freshdesk' && (
                 <div className="flex gap-2">
                   <input
                     type="text"
@@ -628,6 +1129,7 @@ export default function Generate() {
                     {fdLoading ? 'Loading...' : 'Load'}
                   </button>
                 </div>
+                )}
                 {fdTicket && (
                   <div className="rounded-lg border border-blue-200 dark:border-blue-700 bg-blue-50 dark:bg-blue-900/20 p-3 text-xs space-y-1">
                     <div className="flex items-center gap-2 flex-wrap">
@@ -636,6 +1138,30 @@ export default function Generate() {
                       <span className="px-1.5 py-0.5 rounded bg-blue-100 dark:bg-blue-800 text-blue-700 dark:text-blue-300">{fdTicket.status}</span>
                     </div>
                     {fdTicket.requester_name && <p className="text-gray-500 dark:text-gray-400">From: {fdTicket.requester_name} {fdTicket.requester_email ? `(${fdTicket.requester_email})` : ''}</p>}
+                    {fdTicket.requester_email && isSupportEmail(fdTicket.requester_email) && (
+                      <div className="flex items-start gap-2 mt-1 p-2 rounded-md bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-300 dark:border-yellow-600">
+                        <svg className="w-4 h-4 text-yellow-500 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+                        </svg>
+                        <div>
+                          <p className="font-semibold text-yellow-800 dark:text-yellow-300 text-xs">Update contact info required</p>
+                          <p className="text-yellow-700 dark:text-yellow-400 text-xs mt-0.5">
+                            This ticket was submitted by a support email <span className="font-medium">({fdTicket.requester_email})</span>. Please update the requester to the real end user before replying.
+                          </p>
+                          {cmsAltEmails.length > 0 && (
+                            <p className="text-yellow-700 dark:text-yellow-400 text-xs mt-0.5">
+                              Real customer email detected in thread: <span className="font-mono font-semibold">{cmsAltEmails[0]}</span>
+                            </p>
+                          )}
+                          <button
+                            onClick={() => { setContactForm({ name: cmsInfo?.name || parsedInfo?.customer_name || fdTicket?.requester_name || '', email: cmsAltEmails[0] || cmsInfo?.email || parsedInfo?.customer_email || '' }); setShowContactModal(true) }}
+                            className="inline-block mt-1 px-2 py-0.5 rounded bg-yellow-200 dark:bg-yellow-800 text-yellow-900 dark:text-yellow-100 text-xs font-semibold hover:bg-yellow-300 dark:hover:bg-yellow-700 transition-colors"
+                          >
+                            Change contact
+                          </button>
+                        </div>
+                      </div>
+                    )}
                     {fdTicket.company && <p className="text-gray-500 dark:text-gray-400">Company: {fdTicket.company}</p>}
                     {fdTicket.tags?.length > 0 && <p className="text-gray-500 dark:text-gray-400">Tags: {fdTicket.tags.join(', ')}</p>}
                     <p className="text-gray-500 dark:text-gray-400">{fdTicket.conversation_count || 0} replies in thread</p>
@@ -704,6 +1230,9 @@ export default function Generate() {
                         )}
                         {cmsInfo.plan && <p className="text-gray-500 dark:text-gray-400 text-xs">Plan: {cmsInfo.plan}{cmsInfo.subscription_status ? ` (${cmsInfo.subscription_status})` : ''}</p>}
                         {cmsInfo.payment_handler && <p className="text-gray-500 dark:text-gray-400 text-xs">Payment: {cmsInfo.payment_handler}</p>}
+                        {cmsInfo.last_charge?.amount && <p className="text-gray-500 dark:text-gray-400 text-xs">Last charge: {cmsInfo.last_charge.currency} {cmsInfo.last_charge.amount} ({cmsInfo.last_charge.period_start} to {cmsInfo.last_charge.period_end})</p>}
+                        {Array.isArray(cmsInfo.qoss) && <p className="text-gray-500 dark:text-gray-400 text-xs">QOSS: {cmsInfo.qoss.length ? cmsInfo.qoss.length + ' recent sessions' : 'no recent activity'}</p>}
+                        {Array.isArray(cmsInfo.charges) && cmsInfo.charges.length > 0 && <p className="text-gray-500 dark:text-gray-400 text-xs">Charges: {cmsInfo.charges.length} total ({cmsInfo.charges[0].currency} {cmsInfo.charges.reduce((s, c) => s + (parseFloat(c.amount) || 0), 0).toFixed(2)}) — last {cmsInfo.charges[0].date}</p>}
                         {cmsInfo.last_login && <p className="text-gray-500 dark:text-gray-400 text-xs">Last login: {cmsInfo.last_login}</p>}
                         {cmsInfo.device_count > 0 && <p className="text-gray-500 dark:text-gray-400 text-xs">Devices: {cmsInfo.device_count}</p>}
                         {!cmsInfo.is_subscribed && cmsAltEmails.length > 0 && (
@@ -849,7 +1378,7 @@ end_of_access: 2026-05-18`}
             <div className="mt-4 flex justify-end">
               <button
                 onClick={handleAnalyzeAndGenerate}
-                disabled={isLoading || !customerMessage.trim() || !activePlatform || (needsVerification && screenshots.length === 0 && !cmsInfo?.found && cmsAltEmails.length > 0)}
+                disabled={isLoading || !customerMessage.trim() || !activePlatform || (needsVerification && screenshots.length === 0 && !cmsInfo?.found && cmsAltEmails.length > 0 && !agentNotes.trim())}
                 className="px-6 py-2 bg-blue-600 text-white font-medium rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:bg-blue-400 disabled:cursor-not-allowed transition-colors"
               >
                 {isLoading ? (
@@ -871,7 +1400,7 @@ end_of_access: 2026-05-18`}
         </div>
 
         {/* Right Panel - Output */}
-        <div className="space-y-6">
+        <div className="space-y-6 min-w-0">
           {/* Parsed Information */}
           <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-6">
             <h3 className="text-lg font-semibold text-gray-800 dark:text-white mb-4">Parsed Information</h3>
@@ -907,10 +1436,12 @@ end_of_access: 2026-05-18`}
                       {!parsedInfo.ticket_type && <span className="text-gray-400 dark:text-gray-500 italic">Not detected</span>}
                     </p>
                   </div>
-                  <div className="bg-gray-50 dark:bg-gray-700/60 rounded-md px-3 py-2">
-                    <label className="block text-xs font-semibold text-gray-400 dark:text-gray-400 uppercase tracking-wide">Payment Handler</label>
-                    <p className="mt-0.5 text-sm text-gray-900 dark:text-gray-100 font-medium">{parsedInfo.payment_handler || 'Not detected'}</p>
-                  </div>
+                  {cmsInfo?.payment_handler && (
+                    <div className="bg-gray-50 dark:bg-gray-700/60 rounded-md px-3 py-2">
+                      <label className="block text-xs font-semibold text-gray-400 dark:text-gray-400 uppercase tracking-wide">Payment Handler <span className="text-green-500 normal-case">(CMS)</span></label>
+                      <p className="mt-0.5 text-sm text-gray-900 dark:text-gray-100 font-medium">{cmsInfo.payment_handler}</p>
+                    </div>
+                  )}
                 </div>
                 <div className="bg-gray-50 dark:bg-gray-700/60 rounded-md px-3 py-2">
                   <label className="block text-xs font-semibold text-gray-400 dark:text-gray-400 uppercase tracking-wide">Problem Summary</label>
@@ -930,7 +1461,9 @@ end_of_access: 2026-05-18`}
 
           {/* B2C No Account — shown when CMS lookup found nothing */}
           {(() => {
-            if (!cmsInfo || cmsInfo.found || cmsAltEmails.length > 0 || !fdTicket?.id) return null
+            // Alt emails from the thread are auto-tried during load, so if we're
+            // still not found here, none resolved — offer the no-account reply.
+            if (!cmsInfo || cmsInfo.found || !fdTicket?.id) return null
             const noAcctAlreadySent = customerMessage.toLowerCase().includes('do not see an account associated with')
             return (
               <div className="bg-orange-50 dark:bg-orange-900/20 border border-orange-300 dark:border-orange-600 rounded-lg p-4 space-y-2">
@@ -1030,9 +1563,9 @@ end_of_access: 2026-05-18`}
 
           {/* Generated Response */}
           {(!needsVerification || screenshots.length > 0 || cmsInfo?.found || cmsAltEmails.length === 0) && (
-            <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-6">
-              <div className="flex justify-between items-center mb-4">
-                <div className="flex items-center gap-2">
+            <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-6 min-w-0">
+              <div className="flex flex-wrap justify-between items-center gap-2 mb-4">
+                <div className="flex items-center gap-2 min-w-0">
                   <h3 className="text-lg font-semibold text-gray-800 dark:text-white">
                     {nextSteps && generatedResponse ? '✉️ Customer Response' : 'Generated Response'}
                   </h3>
@@ -1048,7 +1581,7 @@ end_of_access: 2026-05-18`}
                     )
                   )}
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2 justify-end">
                   <button
                     onClick={handleRegenerate}
                     disabled={isRegenerating || !parsedInfo}
@@ -1067,6 +1600,16 @@ end_of_access: 2026-05-18`}
                     )}
                   </button>
                   <button
+                    onClick={() => {
+                      if (isEditingResponse) { commitResponseEdit(); setIsEditingResponse(false) }
+                      else { setIsEditingResponse(true) }
+                    }}
+                    disabled={!generatedResponse}
+                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border rounded-lg disabled:opacity-40 disabled:cursor-not-allowed transition-colors ${isEditingResponse ? 'text-white bg-green-600 border-green-600 hover:bg-green-700' : 'text-gray-600 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 border-gray-200 dark:border-gray-600 hover:bg-gray-200 dark:hover:bg-gray-600'}`}
+                  >
+                    {isEditingResponse ? '✓ Done' : '✏️ Edit'}
+                  </button>
+                  <button
                     onClick={handleCopy}
                     disabled={!generatedResponse}
                     className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-gray-600 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
@@ -1074,25 +1617,48 @@ end_of_access: 2026-05-18`}
                     ⎘ Copy
                   </button>
                   {fdTicket?.id && (
-                    <button
-                      onClick={() => setShowPreview(true)}
-                      disabled={!generatedResponse}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors shadow-sm"
-                    >
-                      ✉ Send Reply
-                    </button>
+                    isBlockedRecipientDomain(fdTicket?.requester_email) ? (
+                      <button
+                        onClick={() => { setContactForm({ name: cmsInfo?.name || parsedInfo?.customer_name || '', email: cmsAltEmails[0] || cmsInfo?.email || parsedInfo?.customer_email || '' }); setShowContactModal(true) }}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-amber-600 rounded-lg hover:bg-amber-700 transition-colors shadow-sm"
+                        title={`Contact is ${fdTicket.requester_email} (internal LIV address). Change it to the customer before sending.`}
+                      >
+                        ⚠️ Change contact before sending
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => { commitResponseEdit(); setIsEditingResponse(false); setShowPreview(true) }}
+                        disabled={!generatedResponse}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors shadow-sm"
+                      >
+                        ✉ Send Reply
+                      </button>
+                    )
                   )}
                 </div>
               </div>
 
               {generatedResponse ? (
-                <div className="bg-gray-50 dark:bg-gray-700 rounded-md p-4 max-h-64 overflow-y-auto">
-                  <div className="text-gray-800 dark:text-gray-100 whitespace-pre-wrap prose prose-sm dark:prose-invert" dangerouslySetInnerHTML={{ __html: generatedResponse }} />
-                </div>
+                isEditingResponse ? (
+                  <div
+                    ref={responseEditRef}
+                    contentEditable
+                    suppressContentEditableWarning
+                    onBlur={commitResponseEdit}
+                    className="bg-white dark:bg-gray-900 border-2 border-green-400 dark:border-green-600 rounded-md p-4 max-h-64 overflow-y-auto text-gray-800 dark:text-gray-100 whitespace-pre-wrap prose prose-sm dark:prose-invert focus:outline-none focus:ring-2 focus:ring-green-500"
+                  />
+                ) : (
+                  <div className="bg-gray-50 dark:bg-gray-700 rounded-md p-4 max-h-64 overflow-y-auto">
+                    <div className="text-gray-800 dark:text-gray-100 whitespace-pre-wrap prose prose-sm dark:prose-invert" dangerouslySetInnerHTML={{ __html: generatedResponse }} />
+                  </div>
+                )
               ) : (
                 <div className="text-gray-400 text-center py-8">
                   <p>Generated response will appear here</p>
                 </div>
+              )}
+              {isEditingResponse && (
+                <p className="mt-2 text-[11px] text-green-600 dark:text-green-400">✏️ Editing — click "Done" (or anywhere outside) to save your changes before sending.</p>
               )}
             </div>
           )}
@@ -1230,8 +1796,17 @@ end_of_access: 2026-05-18`}
             </div>
             <div className="flex-1 overflow-y-auto p-6 space-y-4">
               <div>
-                <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2">Reply to customer (ticket #{fdTicket?.id})</p>
-                <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4 text-sm text-gray-800 dark:text-gray-100 whitespace-pre-wrap prose prose-sm dark:prose-invert" dangerouslySetInnerHTML={{ __html: generatedResponse }} />
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Reply to customer (ticket #{fdTicket?.id})</p>
+                  <span className="text-[11px] text-blue-500 dark:text-blue-400">✏️ Click the text to edit before sending</span>
+                </div>
+                <div
+                  ref={previewEditRef}
+                  contentEditable
+                  suppressContentEditableWarning
+                  onBlur={() => { if (previewEditRef.current) setGeneratedResponse(previewEditRef.current.innerHTML) }}
+                  className="bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded-lg p-4 text-sm text-gray-800 dark:text-gray-100 whitespace-pre-wrap prose prose-sm dark:prose-invert focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                />
               </div>
               {screenshots.length > 0 && (
                 <div>
@@ -1260,7 +1835,7 @@ end_of_access: 2026-05-18`}
               {cmsInfo?.found && buildCmsNote(cmsInfo) && (
                 <div>
                   <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2">Private note (CMS account data)</p>
-                  <pre className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-700 rounded-lg p-4 text-xs text-gray-700 dark:text-gray-300 whitespace-pre-wrap font-mono">{buildCmsNote(cmsInfo)}</pre>
+                  <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-700 rounded-lg p-4 text-xs text-gray-700 dark:text-gray-300" dangerouslySetInnerHTML={{ __html: buildCmsNote(cmsInfo) }} />
                 </div>
               )}
             </div>
@@ -1285,6 +1860,54 @@ end_of_access: 2026-05-18`}
           </div>
         </div>
       )}
+    {showContactModal && (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+        <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl p-6 w-full max-w-md mx-4">
+          <h2 className="text-base font-bold text-gray-800 dark:text-white mb-4">Update ticket contact</h2>
+          <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">
+            Enter the real user information. This will update the requester on the Freshdesk ticket.
+          </p>
+          <div className="space-y-3">
+            <div>
+              <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Full name</label>
+              <input
+                type="text"
+                value={contactForm.name}
+                onChange={e => setContactForm(f => ({ ...f, name: e.target.value }))}
+                placeholder="David Teeter"
+                className="w-full px-3 py-2 text-sm rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Email</label>
+              <input
+                type="email"
+                value={contactForm.email}
+                onChange={e => setContactForm(f => ({ ...f, email: e.target.value }))}
+                placeholder="user@example.com"
+                className="w-full px-3 py-2 text-sm rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-700 text-gray-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+            {contactError && <p className="text-xs text-red-500">{contactError}</p>}
+          </div>
+          <div className="flex justify-end gap-2 mt-5">
+            <button
+              onClick={() => { setShowContactModal(false); setContactError('') }}
+              className="px-4 py-2 text-sm rounded-lg border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={saveContact}
+              disabled={contactSaving || !contactForm.name.trim() || !contactForm.email.trim()}
+              className="px-4 py-2 text-sm rounded-lg bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-medium transition-colors"
+            >
+              {contactSaving ? 'Saving...' : 'Update contact'}
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
     </>
   )
 }

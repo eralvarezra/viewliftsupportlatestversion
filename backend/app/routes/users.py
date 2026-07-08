@@ -14,7 +14,10 @@ router = APIRouter()
 
 
 def _today_start() -> datetime:
-    return datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    from datetime import timezone, timedelta
+    tz_cr = timezone(timedelta(hours=-6))
+    now_cr = datetime.now(tz_cr).replace(hour=0, minute=0, second=0, microsecond=0)
+    return now_cr.astimezone(timezone.utc).replace(tzinfo=None)
 
 
 @router.get("/", response_model=List[UserAdminItem])
@@ -219,3 +222,45 @@ def update_username(
     user.username = new_username
     db.commit()
     return {"username": user.username}
+
+
+@router.get("/{user_id}/tickets")
+async def get_user_ticket_logs(
+    user_id: int,
+    date: str = None,
+    current_user: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    from datetime import timedelta
+    from datetime import timedelta as _td
+    CR_OFFSET = _td(hours=6)
+    if date:
+        try:
+            day_start = datetime.fromisoformat(date) + CR_OFFSET
+        except ValueError:
+            day_start = _today_start()
+    else:
+        day_start = _today_start()
+    day_end = day_start + _td(days=1)
+
+    logs = (
+        db.query(TicketLog)
+        .filter(
+            TicketLog.user_id == user_id,
+            TicketLog.worked_at >= day_start,
+            TicketLog.worked_at < day_end,
+        )
+        .order_by(TicketLog.worked_at.desc())
+        .all()
+    )
+
+    return [
+        {
+            "id": log.id,
+            "ticket_id": log.ticket_url.rstrip("/").split("/")[-1],
+            "ticket_url": log.ticket_url,
+            "worked_at": log.worked_at.isoformat() + "Z",
+        }
+        for log in logs
+    ]
+

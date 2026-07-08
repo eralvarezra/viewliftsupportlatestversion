@@ -138,6 +138,7 @@ Extract the following information:
 - subscription_status: From account notes - extract status, subscription state, end_of_access date
 - account_active: Boolean - is the account active with valid subscription?
 - payment_handler: The billing platform detected from account notes or message (e.g. Stripe, Google Play, Apple, Roku, Amazon). Use null if not found.
+- incident_dates: List of specific calendar dates in YYYY-MM-DD format when the customer says the problem happened or that are directly relevant to the complaint (e.g. "couldn't watch the game on July 3" or "I was charged on 05/19/2025"). Infer the year from context; if the customer gives no year, assume the most recent past occurrence. Use [] if no specific dates are mentioned.
 - ticket_type: Classify the ticket as "billing" or "technical".
   Use "billing" if the message involves ANY of: charges, unexpected charges, refunds, refund requests,
   subscription cancellation, payment disputes, payment issues, credits, reimbursements, billing errors.
@@ -159,6 +160,7 @@ Example format:
     "subscription_status": "active - COMPLETED - access until 2026-05-18",
     "account_active": true,
     "payment_handler": "Stripe",
+    "incident_dates": ["2026-07-03"],
     "ticket_type": "technical"
 }}
 """

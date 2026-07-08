@@ -165,35 +165,71 @@ class ClaudeClient:
             "- If the FAQ context references a different app name, ignore that name and use "
             + platform_name + " only" + cms_line + "\n\n"
         )
-        ticket_type = parsed_data.get("ticket_type")
-        prompt_template = GENERATE_TECHNICAL_PROMPT if ticket_type == "technical" else GENERATE_BILLING_PROMPT
-        prompt = prompt_template.format(
-            parsed_data=json.dumps(parsed_data, indent=2),
-            faq_context=faq_context if faq_context else "No relevant FAQ context available.",
-            original_message=original_message,
-            cms_url=cms_url or "Not available",
-        )
-
         notes = (agent_notes or "").strip()
 
-        # Split system into two blocks: large constant rules block (cached) + small variable block.
-        # Cache hits on rules save ~90% of those token costs on subsequent calls.
+        ticket_type = parsed_data.get("ticket_type")
         if notes and override_rules:
-            non_cached_text = (
-                "PRIORITY 0 — AGENT OVERRIDE (overrides ALL rules and FAQ below):\n"
-                + notes + "\n\n---\n\n" + platform_identity
+            # When manual agent notes exist (override_rules=True), use a focused prompt that
+            # puts the agent instruction FIRST. CMS-only data (no manual notes) uses the
+            # normal billing/technical prompt so FAQ context and canned responses are used.
+            customer_name = parsed_data.get("customer_name") or "Customer"
+            first_name = customer_name.split()[0] if customer_name else "Customer"
+            faq_section = (
+                "\nREFERENCE INFORMATION (use only if directly relevant to instructions above):\n"
+                + faq_context
+            ) if faq_context else ""
+            prompt = (
+                f"Write a professional customer service email for {platform_name}.\n\n"
+                f"Customer name: {customer_name}\n\n"
+                "AGENT INSTRUCTION — what to communicate (follow exactly, nothing else):\n"
+                + notes
+                + faq_section
+                + "\n\nOutput in this exact format:\n"
+                "[CUSTOMER RESPONSE]\n"
+                f"Hello {first_name},\n\n"
+                "[body following AGENT INSTRUCTION only — no verification steps, no troubleshooting]\n\n"
+                "Regards,\n"
+                "The Technical Support Team\n"
+                "[NEXT STEPS]\n"
+                "[1-2 agent-facing next steps if applicable, else: None]"
             )
         elif notes:
-            non_cached_text = (
-                platform_identity
-                + "\n\n---\n\n"
-                "MANDATORY AGENT INSTRUCTIONS — these are hard rules set by the support agent. "
-                "They MUST be followed exactly and override the billing/technical prompt behavior where they conflict. "
-                "Do NOT violate these under any circumstances:\n"
+            # CMS data present but no manual agent notes — use a CMS-aware prompt that
+            # bypasses the BILLING CASE A/B screenshot gatekeeping entirely.
+            customer_name = parsed_data.get("customer_name") or "Customer"
+            first_name = customer_name.split()[0] if customer_name else "Customer"
+            prompt = (
+                f"Write a professional customer service email for {platform_name}.\n\n"
+                f"VERIFIED ACCOUNT DATA (automatically retrieved from CMS — do NOT request verification or screenshots):\n"
                 + notes
+                + f"\n\nCUSTOMER MESSAGE:\n{original_message}\n\n"
+                f"TICKET DATA:\n{json.dumps(parsed_data, indent=2)}\n\n"
+                f"FAQ & CANNED RESPONSES (use when applicable):\n"
+                + (faq_context if faq_context else "No relevant FAQ context available.")
+                + "\n\nWrite a complete, helpful response addressing the customer's issue. "
+                "Use the verified account data and FAQ context above. "
+                "Do NOT output [NEEDS_VERIFICATION]. Do NOT ask for a CMS screenshot.\n\n"
+                "Output in this exact format:\n"
+                "[CUSTOMER RESPONSE]\n"
+                f"Hello {first_name},\n\n"
+                "[body]\n\n"
+                "Regards,\n"
+                "The Technical Support Team\n"
+                "[NEXT STEPS]\n"
+                "[1-2 agent-facing next steps, or None]"
             )
         else:
-            non_cached_text = platform_identity
+            prompt_template = GENERATE_TECHNICAL_PROMPT if ticket_type == "technical" else GENERATE_BILLING_PROMPT
+            prompt = prompt_template.format(
+                parsed_data=json.dumps(parsed_data, indent=2),
+                faq_context=faq_context if faq_context else "No relevant FAQ context available.",
+                original_message=original_message,
+                cms_url=cms_url or "Not available",
+            )
+
+        non_cached_text = platform_identity
+
+        # Split system into two blocks: large constant rules block (cached) + small variable block.
 
         system_blocks = [
             {"type": "text", "text": rules, "cache_control": {"type": "ephemeral"}},
