@@ -601,9 +601,11 @@ async def generate(
         customer_response = _ensure_signatures(customer_response, parsed_data.customer_name)
 
     # Step 7: Enforce 100-record cap per user per platform (circular buffer — delete oldest if full)
+    # Rated entries (feedback set) are the bot's learning corpus — excluded from the cap.
     history_count = db.query(ResponseHistory).filter(
         ResponseHistory.user_id == current_user.id,
         ResponseHistory.platform_id == request.platform_id,
+        ResponseHistory.feedback.is_(None),
     ).count()
     if history_count >= 100:
         oldest = (
@@ -611,6 +613,7 @@ async def generate(
             .filter(
                 ResponseHistory.user_id == current_user.id,
                 ResponseHistory.platform_id == request.platform_id,
+                ResponseHistory.feedback.is_(None),
             )
             .order_by(ResponseHistory.created_at.asc())
             .first()

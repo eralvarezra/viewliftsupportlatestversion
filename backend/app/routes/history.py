@@ -22,12 +22,35 @@ def _today_start() -> datetime:
 
 
 def _cleanup_old_history(user_id: int, db: Session):
-    """Delete response history records older than today (UTC)."""
+    """Delete response history records older than today (UTC).
+
+    Rated entries (feedback set) are the bot's learning corpus — never pruned."""
     db.query(ResponseHistory).filter(
         ResponseHistory.user_id == user_id,
         ResponseHistory.created_at < _today_start(),
+        ResponseHistory.feedback.is_(None),
     ).delete(synchronize_session=False)
     db.commit()
+
+
+def _feedback_embedding_text(entry: ResponseHistory) -> str:
+    """Same semantics as /generate's search query: problem_summary + context, falling back to raw message."""
+    pd = entry.parsed_data if isinstance(entry.parsed_data, dict) else {}
+    ps = (pd.get("problem_summary") or "").strip()
+    ctx = (pd.get("context") or "").strip()
+    return f"{ps} {ctx}".strip() if ps else entry.customer_message
+
+
+def _ensure_embedding(entry: ResponseHistory) -> None:
+    """Compute+store the message embedding. Fail-open: rating must never fail because of this."""
+    if entry.message_embedding is not None:
+        return
+    try:
+        from app.services.local_embeddings import LocalEmbeddingService
+        svc = LocalEmbeddingService()
+        entry.message_embedding = svc.serialize_embedding(svc.get_embedding(_feedback_embedding_text(entry)))
+    except Exception:
+        pass
 
 
 def _effective_offset(user: User) -> int:
@@ -168,6 +191,12 @@ async def update_feedback(
         raise HTTPException(status_code=404, detail="History entry not found")
 
     entry.feedback = request.feedback
+    if request.feedback == "not_useful":
+        if entry.review_status not in ("corrected", "dismissed"):
+            entry.review_status = "pending"
+    else:
+        entry.review_status = None
+    _ensure_embedding(entry)
     db.commit()
 
     return {"message": "Feedback updated successfully", "feedback": request.feedback}
