@@ -3,10 +3,45 @@ import Layout from '../components/Layout'
 import client from '../api/client'
 import toast from 'react-hot-toast'
 
+const FRESHDESK_TICKET_URL = 'https://viewlift.freshdesk.com/a/tickets/'
+
+const ticketIdFrom = (text) => (text.match(/\[Ticket #(\d+)\]/) || [])[1] || null
+
+// Render "[Ticket #123456]" references as links to Freshdesk (to check if the
+// customer marked the case resolved, read the thread, etc.)
+function linkifyTickets(text) {
+  return text.split(/(\[Ticket #\d+\])/g).map((part, i) => {
+    const m = part.match(/^\[Ticket #(\d+)\]$/)
+    return m ? (
+      <a
+        key={i}
+        href={FRESHDESK_TICKET_URL + m[1]}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="text-blue-600 dark:text-blue-400 font-semibold hover:underline"
+      >
+        {part}
+      </a>
+    ) : part
+  })
+}
+
 function ItemMeta({ item }) {
+  const ticketId = ticketIdFrom(item.customer_message)
   return (
     <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
       <span className="font-semibold text-gray-700 dark:text-gray-200">{item.customer_name || 'Unknown customer'}</span>
+      {ticketId && (
+        <a
+          href={FRESHDESK_TICKET_URL + ticketId}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="px-2 py-0.5 rounded-full bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-300 font-medium hover:underline"
+          title="Open ticket in Freshdesk"
+        >
+          #{ticketId} ↗
+        </a>
+      )}
       {item.platform_name && <span className="px-2 py-0.5 rounded-full bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-300">{item.platform_name}</span>}
       {item.agent_username && <span>agent: {item.agent_username}</span>}
       <span>{new Date(item.created_at).toLocaleString()}</span>
@@ -47,7 +82,7 @@ function QueueItem({ item, onDone }) {
       <div>
         <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1">Customer message</p>
         <div className="text-sm text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-700/50 rounded-md p-3 whitespace-pre-wrap max-h-48 overflow-y-auto">
-          {item.customer_message}
+          {linkifyTickets(item.customer_message)}
         </div>
       </div>
       <div>
@@ -137,9 +172,9 @@ function RecentItem({ item, onRated }) {
         </div>
       </div>
       <div className="text-sm text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-700/50 rounded-md p-3 whitespace-pre-wrap">
-        {expanded || item.customer_message.length <= 220
+        {linkifyTickets(expanded || item.customer_message.length <= 220
           ? item.customer_message
-          : item.customer_message.slice(0, 220) + '…'}
+          : item.customer_message.slice(0, 220) + '…')}
       </div>
       <div className={`text-sm text-gray-600 dark:text-gray-400 border-l-2 border-blue-200 dark:border-blue-800 pl-3 whitespace-pre-wrap ${expanded ? '' : 'max-h-24 overflow-hidden'}`}>
         {item.generated_response}
