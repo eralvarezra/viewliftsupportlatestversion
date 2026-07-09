@@ -68,7 +68,6 @@ export default function Header() {
     { to: '/tracker', label: 'Tracker' },
     { to: '/insights', label: 'Daily Update' },
     ...(isAdmin && user?.is_superadmin ? [
-      { to: '/reports', label: 'Reports' },
       { to: '/open-tickets', label: 'CSAT Analysis' },
     ] : []),
   ]

@@ -8,7 +8,6 @@ import Users from './pages/Users'
 import Insights from './pages/Insights'
 import Tracker from './pages/Tracker'
 import Profile from './pages/Profile'
-import Reports from './pages/Reports'
 import OpenTickets from './pages/OpenTickets'
 import ReviewQueue from './pages/ReviewQueue'
 import ProtectedRoute from './components/ProtectedRoute'
@@ -74,14 +73,6 @@ function App() {
           element={
             <ProtectedRoute>
               <Profile />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/reports"
-          element={
-            <ProtectedRoute>
-              <Reports />
             </ProtectedRoute>
           }
         />

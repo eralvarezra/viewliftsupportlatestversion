@@ -14,7 +14,6 @@ from app.routes.ticket_tracker import router as ticket_tracker_router
 from app.routes.harvest import router as harvest_router
 from app.routes.csat import router as csat_router
 from app.routes.daily_update import router as daily_update_router
-from app.routes.reports import router as reports_router
 
 app = FastAPI(
     title="SCHN+ Support Assistant",
@@ -42,7 +41,6 @@ app.include_router(insights_router, prefix="/api/insights", tags=["insights"])
 app.include_router(platforms_router, prefix="/api/platforms", tags=["platforms"])
 app.include_router(ticket_tracker_router, prefix="/api/ticket-tracker", tags=["ticket-tracker"])
 app.include_router(daily_update_router, prefix="/api/daily-update", tags=["daily-update"])
-app.include_router(reports_router, prefix="/api/reports", tags=["reports"])
 
 
 @app.on_event("startup")
