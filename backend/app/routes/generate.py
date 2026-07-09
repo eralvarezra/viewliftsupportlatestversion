@@ -670,36 +670,41 @@ async def generate(
         customer_response = _fix_bold(raw_response)
         customer_response = _ensure_signatures(customer_response, parsed_data.customer_name)
 
-    # Step 7: Enforce 100-record cap per user per platform (circular buffer — delete oldest if full)
-    # Rated entries (feedback set) are the bot's learning corpus — excluded from the cap.
-    history_count = db.query(ResponseHistory).filter(
-        ResponseHistory.user_id == current_user.id,
-        ResponseHistory.platform_id == request.platform_id,
-        ResponseHistory.feedback.is_(None),
-    ).count()
-    if history_count >= 100:
-        oldest = (
-            db.query(ResponseHistory)
-            .filter(
-                ResponseHistory.user_id == current_user.id,
-                ResponseHistory.platform_id == request.platform_id,
-                ResponseHistory.feedback.is_(None),
+    # A verification-only output ([NEEDS_VERIFICATION], no customer response) is an internal
+    # step, not a response — don't record it in history. The final response after CMS
+    # verification gets saved on its own /generate call.
+    _hist = None
+    if customer_response is not None:
+        # Step 7: Enforce 100-record cap per user per platform (circular buffer — delete oldest if full)
+        # Rated entries (feedback set) are the bot's learning corpus — excluded from the cap.
+        history_count = db.query(ResponseHistory).filter(
+            ResponseHistory.user_id == current_user.id,
+            ResponseHistory.platform_id == request.platform_id,
+            ResponseHistory.feedback.is_(None),
+        ).count()
+        if history_count >= 100:
+            oldest = (
+                db.query(ResponseHistory)
+                .filter(
+                    ResponseHistory.user_id == current_user.id,
+                    ResponseHistory.platform_id == request.platform_id,
+                    ResponseHistory.feedback.is_(None),
+                )
+                .order_by(ResponseHistory.created_at.asc())
+                .first()
             )
-            .order_by(ResponseHistory.created_at.asc())
-            .first()
-        )
-        if oldest:
-            db.delete(oldest)
+            if oldest:
+                db.delete(oldest)
 
-    _hist = ResponseHistory(
-        user_id=current_user.id,
-        customer_name=parsed_data.customer_name,
-        customer_message=request.message,
-        parsed_data=parsed_dict,
-        generated_response=customer_response or raw_response,
-        platform_id=request.platform_id,
-    )
-    db.add(_hist)
+        _hist = ResponseHistory(
+            user_id=current_user.id,
+            customer_name=parsed_data.customer_name,
+            customer_message=request.message,
+            parsed_data=parsed_dict,
+            generated_response=customer_response,
+            platform_id=request.platform_id,
+        )
+        db.add(_hist)
     haiku_cost = parse_tokens["input"] * _HAIKU_IN + parse_tokens["output"] * _HAIKU_OUT
     sonnet_cost = (
         gen_tokens["input"] * _SONNET_IN
@@ -727,5 +732,5 @@ async def generate(
         faq_sources=faq_sources,
         canned_sources=canned_sources,
         cache_hit=gen_tokens.get("cache_read", 0) > 0,
-        history_id=_hist.id,
+        history_id=_hist.id if _hist else None,
     )

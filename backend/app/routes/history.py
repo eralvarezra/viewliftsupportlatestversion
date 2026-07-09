@@ -194,6 +194,8 @@ async def get_recent_responses(
     _require_superadmin(current_user)
     entries = (
         db.query(ResponseHistory)
+        # Legacy verification-step rows aren't customer responses — hide them
+        .filter(~ResponseHistory.generated_response.like("[NEEDS_VERIFICATION]%"))
         .order_by(ResponseHistory.created_at.desc())
         .limit(limit)
         .all()
