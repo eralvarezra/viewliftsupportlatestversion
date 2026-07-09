@@ -54,6 +54,8 @@ export default function Generate() {
   const [screenshots, setScreenshots] = useState([]) // [{ base64, mediaType, previewUrl }]
   const [parsedInfo, setParsedInfo] = useState(null)
   const [generatedResponse, setGeneratedResponse] = useState('')
+  const [historyId, setHistoryId] = useState(null)
+  const [responseRating, setResponseRating] = useState(null) // 'useful' | 'not_useful' | null
   const [nextSteps, setNextSteps] = useState(null)
   const [botNotes, setBotNotes] = useState(null)
   const [agentNotes, setAgentNotes] = useState("")
@@ -251,6 +253,8 @@ export default function Generate() {
       setNeedsVerification(response.data.needs_verification || false)
       setFaqSources(response.data.faq_sources || [])
       setCannedSources(response.data.canned_sources || [])
+      setHistoryId(response.data.history_id || null)
+      setResponseRating(null)
       return response.data
     } catch (error) {
       const msg = apiErr(error, 'Failed to generate response. Please try again.')
@@ -303,6 +307,8 @@ export default function Generate() {
       setNeedsVerification(response.data.needs_verification || false)
       setFaqSources(response.data.faq_sources || [])
       setCannedSources(response.data.canned_sources || [])
+      setHistoryId(response.data.history_id || null)
+      setResponseRating(null)
 
       if (response.data.needs_verification) {
         toast('CMS verification required — attach a screenshot to continue', { icon: '⚠️' })
@@ -314,6 +320,19 @@ export default function Generate() {
       toast.error(message)
     } finally {
       setIsRegenerating(false)
+    }
+  }
+
+  const rateResponse = async (value) => {
+    if (!historyId) return
+    const prev = responseRating
+    setResponseRating(value)
+    try {
+      await client.patch(`/history/${historyId}/feedback`, { feedback: value })
+      toast.success(value === 'useful' ? 'Rated as good response' : 'Sent to review queue')
+    } catch (error) {
+      setResponseRating(prev)
+      toast.error('Failed to save rating')
     }
   }
 
@@ -1579,6 +1598,32 @@ end_of_access: 2026-05-18`}
                         Fresh
                       </span>
                     )
+                  )}
+                  {generatedResponse && historyId && (
+                    <div className="flex items-center gap-1 ml-1">
+                      <button
+                        onClick={() => rateResponse('useful')}
+                        title="Good response — teaches the bot to answer similar cases like this"
+                        className={`px-2 py-1 rounded-md text-sm transition-colors border ${
+                          responseRating === 'useful'
+                            ? 'bg-green-100 border-green-400 dark:bg-green-900/40 dark:border-green-600'
+                            : 'bg-transparent border-gray-200 dark:border-gray-600 opacity-60 hover:opacity-100'
+                        }`}
+                      >
+                        👍
+                      </button>
+                      <button
+                        onClick={() => rateResponse('not_useful')}
+                        title="Bad response — sends it to the developer review queue"
+                        className={`px-2 py-1 rounded-md text-sm transition-colors border ${
+                          responseRating === 'not_useful'
+                            ? 'bg-red-100 border-red-400 dark:bg-red-900/40 dark:border-red-600'
+                            : 'bg-transparent border-gray-200 dark:border-gray-600 opacity-60 hover:opacity-100'
+                        }`}
+                      >
+                        👎
+                      </button>
+                    </div>
                   )}
                 </div>
                 <div className="flex flex-wrap items-center gap-2 justify-end">
