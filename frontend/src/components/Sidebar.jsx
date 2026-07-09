@@ -79,7 +79,7 @@ export default function Sidebar() {
   }
 
   return (
-    <aside className="hidden lg:flex fixed left-0 top-16 bottom-0 w-16 flex-col items-center py-3 gap-1.5 bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 z-40 transition-colors">
+    <aside className="hidden lg:flex fixed left-0 top-0 bottom-0 w-16 flex-col items-center py-3 gap-1.5 bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 z-40 transition-colors">
       <RailLink to="/generate" label="Generate" icon={ICONS.generate} />
       <RailLink to="/history" label="B2C Responses" icon={ICONS.responses} />
       <RailLink to="/tracker" label="Tracker" icon={ICONS.tracker} />
