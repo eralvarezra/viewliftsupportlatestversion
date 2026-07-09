@@ -88,6 +88,7 @@ const STATUS_BADGES = {
 function RecentItem({ item, onRated }) {
   const [expanded, setExpanded] = useState(false)
   const badge = item.review_status ? STATUS_BADGES[item.review_status] : null
+  const isVerification = item.generated_response.trimStart().startsWith('[NEEDS_VERIFICATION]')
 
   const rate = async (value) => {
     try {
@@ -104,6 +105,11 @@ function RecentItem({ item, onRated }) {
       <div className="flex flex-wrap items-center justify-between gap-2">
         <ItemMeta item={item} />
         <div className="flex items-center gap-1">
+          {isVerification ? (
+            <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-amber-50 text-amber-600 dark:bg-amber-900/30 dark:text-amber-300" title="Internal verification instructions, not a customer response — not ratable">
+              verification step
+            </span>
+          ) : (<>
           {badge && <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${badge.cls}`}>{badge.label}</span>}
           <button
             onClick={() => rate('useful')}
@@ -127,6 +133,7 @@ function RecentItem({ item, onRated }) {
           >
             👎
           </button>
+          </>)}
         </div>
       </div>
       <div className="text-sm text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-700/50 rounded-md p-3 whitespace-pre-wrap">

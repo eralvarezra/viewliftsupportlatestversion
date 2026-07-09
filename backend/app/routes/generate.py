@@ -300,8 +300,11 @@ def _learned_examples_block(db, embedding_service, query_embedding, platform_id)
                 continue
             is_corrected = r.feedback == "not_useful"
             response_text = r.corrected_response if is_corrected else r.generated_response
-            if response_text:
-                scored.append((is_corrected, sim, r.customer_message, response_text))
+            # Verification-step outputs are internal instructions, never customer responses —
+            # excluded even if someone rated them by mistake.
+            if not response_text or response_text.lstrip().startswith("[NEEDS_VERIFICATION]"):
+                continue
+            scored.append((is_corrected, sim, r.customer_message, response_text))
         if not scored:
             return ""
         scored.sort(key=lambda x: (0 if x[0] else 1, -x[1]))  # corrections first, then similarity
