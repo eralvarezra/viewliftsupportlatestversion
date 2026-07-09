@@ -90,9 +90,17 @@ export default function Header() {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex justify-between items-center h-16">
           <div className="flex items-center gap-6">
-            <h1 className="text-lg font-bold text-gray-800 dark:text-white whitespace-nowrap">
-              ViewLift Support
-            </h1>
+            <div className="flex items-center gap-2.5 whitespace-nowrap">
+              <img
+                src="/viewlift-logo.png"
+                alt="ViewLift"
+                className="h-8 w-auto invert dark:invert-0"
+              />
+              <h1 className="text-lg font-bold text-gray-800 dark:text-white leading-tight">
+                ViewLift Support
+                <span className="block text-[10px] font-medium text-blue-500 dark:text-blue-400 uppercase tracking-widest -mt-0.5">AI Assistant</span>
+              </h1>
+            </div>
             {/* Desktop nav moved to the left Sidebar (Freshdesk-style rail) */}
           </div>
 
