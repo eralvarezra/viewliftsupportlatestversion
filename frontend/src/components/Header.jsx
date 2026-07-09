@@ -92,11 +92,7 @@ export default function Header() {
             <h1 className="text-lg font-bold text-gray-800 dark:text-white whitespace-nowrap">
               ViewLift Support
             </h1>
-            <nav className="hidden lg:flex items-center gap-1">
-              {navLinks.map(({ to, label }) => (
-                <NavLink key={to} to={to} className={navClass}>{label}</NavLink>
-              ))}
-            </nav>
+            {/* Desktop nav moved to the left Sidebar (Freshdesk-style rail) */}
           </div>
 
           <div className="flex items-center gap-2">
