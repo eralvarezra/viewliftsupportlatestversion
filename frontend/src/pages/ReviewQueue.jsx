@@ -123,7 +123,7 @@ const STATUS_BADGES = {
 function RecentItem({ item, onRated }) {
   const [expanded, setExpanded] = useState(false)
   const badge = item.review_status ? STATUS_BADGES[item.review_status] : null
-  const isVerification = item.generated_response.trimStart().startsWith('[NEEDS_VERIFICATION]')
+  const isVerification = item.generated_response.includes('[NEEDS_VERIFICATION]')
 
   const rate = async (value) => {
     try {

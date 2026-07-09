@@ -195,7 +195,8 @@ async def get_recent_responses(
     entries = (
         db.query(ResponseHistory)
         # Legacy verification-step rows aren't customer responses — hide them
-        .filter(~ResponseHistory.generated_response.like("[NEEDS_VERIFICATION]%"))
+        # (marker may appear after [BOT NOTES], so match anywhere)
+        .filter(~ResponseHistory.generated_response.like("%[NEEDS_VERIFICATION]%"))
         .order_by(ResponseHistory.created_at.desc())
         .limit(limit)
         .all()

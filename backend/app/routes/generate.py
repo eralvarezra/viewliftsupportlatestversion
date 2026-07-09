@@ -301,8 +301,9 @@ def _learned_examples_block(db, embedding_service, query_embedding, platform_id)
             is_corrected = r.feedback == "not_useful"
             response_text = r.corrected_response if is_corrected else r.generated_response
             # Verification-step outputs are internal instructions, never customer responses —
-            # excluded even if someone rated them by mistake.
-            if not response_text or response_text.lstrip().startswith("[NEEDS_VERIFICATION]"):
+            # excluded even if someone rated them by mistake. Legacy rows may prefix the
+            # marker with [BOT NOTES], so check anywhere in the text.
+            if not response_text or "[NEEDS_VERIFICATION]" in response_text:
                 continue
             pd = r.parsed_data if isinstance(r.parsed_data, dict) else {}
             summary = (pd.get("problem_summary") or "").strip()
