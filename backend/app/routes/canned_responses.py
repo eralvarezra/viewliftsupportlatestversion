@@ -118,6 +118,25 @@ def _run_sync():
         _sync_lock.release()
 
 
+@router.get("/")
+def list_canned_responses(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """List all synced canned responses (FAQs page)."""
+    rows = db.query(CannedResponse).order_by(CannedResponse.title.asc()).all()
+    return [
+        {
+            "id": r.id,
+            "title": r.title,
+            "content": r.content,
+            "platform_name": r.platform.name if r.platform else None,
+            "synced_at": r.synced_at,
+        }
+        for r in rows
+    ]
+
+
 @router.post("/sync")
 def sync_canned_responses(
     current_user: User = Depends(get_current_user),
