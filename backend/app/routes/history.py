@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.auth.routes import get_current_user
 from app.database import get_db
-from app.models import User, ResponseHistory
+from app.models import User, ResponseHistory, Platform
 from app.schemas import (
     HistoryItem, HistoryDetail, FeedbackRequest, UserStats, AdjustCounterRequest, SetGoalRequest,
     CorrectRequest, ReviewQueueItem, ReviewQueueResponse,
@@ -216,6 +216,90 @@ async def get_recent_responses(
         for e in entries
     ]
     return ReviewQueueResponse(count=len(items), items=items)
+
+
+@router.get("/learning-stats")
+async def get_learning_stats(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Bot learning progress: corpus size, injection usage, top examples (superadmin)."""
+    _require_superadmin(current_user)
+    from sqlalchemy import or_, and_
+    from collections import Counter
+
+    # Corpus counts
+    useful = db.query(ResponseHistory).filter(ResponseHistory.feedback == "useful").count()
+    corrected = db.query(ResponseHistory).filter(ResponseHistory.review_status == "corrected").count()
+    pending = db.query(ResponseHistory).filter(
+        ResponseHistory.feedback == "not_useful", ResponseHistory.review_status == "pending"
+    ).count()
+    dismissed = db.query(ResponseHistory).filter(ResponseHistory.review_status == "dismissed").count()
+
+    # Active examples (actually usable for injection) per platform
+    active_filter = and_(
+        ResponseHistory.message_embedding.isnot(None),
+        or_(
+            ResponseHistory.feedback == "useful",
+            and_(ResponseHistory.feedback == "not_useful", ResponseHistory.review_status == "corrected"),
+        ),
+        ~ResponseHistory.generated_response.like("%[NEEDS_VERIFICATION]%"),
+    )
+    by_platform = (
+        db.query(Platform.name, func.count(ResponseHistory.id))
+        .join(ResponseHistory, ResponseHistory.platform_id == Platform.id)
+        .filter(active_filter)
+        .group_by(Platform.name)
+        .all()
+    )
+
+    # Usage among the most recent 200 generations
+    recent = (
+        db.query(ResponseHistory)
+        .order_by(ResponseHistory.created_at.desc())
+        .limit(200)
+        .all()
+    )
+    with_examples = [r for r in recent if r.learned_examples]
+    used_rated_good = sum(1 for r in with_examples if r.feedback == "useful")
+    used_rated_bad = sum(1 for r in with_examples if r.feedback == "not_useful")
+
+    # Most-used examples
+    counter = Counter()
+    for r in with_examples:
+        for ex in (r.learned_examples or []):
+            if isinstance(ex, dict) and ex.get("id"):
+                counter[ex["id"]] += 1
+    top_examples = []
+    for ex_id, uses in counter.most_common(5):
+        src = db.query(ResponseHistory).filter(ResponseHistory.id == ex_id).first()
+        if not src:
+            continue
+        pd = src.parsed_data if isinstance(src.parsed_data, dict) else {}
+        top_examples.append({
+            "id": ex_id,
+            "uses": uses,
+            "corrected": src.review_status == "corrected",
+            "problem": ((pd.get("problem_summary") or "").strip() or src.customer_message[:100])[:140],
+            "platform_name": src.platform.name if src.platform else None,
+        })
+
+    return {
+        "corpus": {
+            "useful": useful,
+            "corrected": corrected,
+            "pending": pending,
+            "dismissed": dismissed,
+            "active_by_platform": [{"platform": name, "count": count} for name, count in by_platform],
+        },
+        "usage": {
+            "recent_total": len(recent),
+            "with_examples": len(with_examples),
+            "used_rated_good": used_rated_good,
+            "used_rated_bad": used_rated_bad,
+        },
+        "top_examples": top_examples,
+    }
 
 
 @router.post("/{history_id}/correct")

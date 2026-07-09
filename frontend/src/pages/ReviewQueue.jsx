@@ -186,21 +186,101 @@ function RecentItem({ item, onRated }) {
   )
 }
 
+function StatCard({ label, value, accent }) {
+  return (
+    <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-4">
+      <p className={`text-2xl font-bold ${accent || 'text-gray-800 dark:text-white'}`}>{value}</p>
+      <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{label}</p>
+    </div>
+  )
+}
+
+function LearningTab({ stats }) {
+  if (!stats) return <p className="text-sm text-gray-400">Loading…</p>
+  const { corpus, usage, top_examples } = stats
+  const activeTotal = corpus.useful + corpus.corrected
+  const pct = usage.recent_total > 0 ? Math.round((usage.with_examples / usage.recent_total) * 100) : 0
+  const ratedUsed = usage.used_rated_good + usage.used_rated_bad
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <StatCard label="Active examples (👍 + corrections)" value={activeTotal} accent="text-purple-600 dark:text-purple-400" />
+        <StatCard label="Developer corrections" value={corpus.corrected} accent="text-blue-600 dark:text-blue-400" />
+        <StatCard label="Pending review (👎)" value={corpus.pending} accent={corpus.pending > 0 ? 'text-red-500' : undefined} />
+        <StatCard label="Dismissed" value={corpus.dismissed} />
+      </div>
+
+      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-5 space-y-2">
+        <div className="flex items-baseline justify-between">
+          <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-200">Learning usage — last {usage.recent_total} responses</h3>
+          <span className="text-lg font-bold text-purple-600 dark:text-purple-400">{pct}%</span>
+        </div>
+        <div className="w-full bg-gray-200 dark:bg-gray-600 rounded-full h-2">
+          <div className="bg-purple-500 h-2 rounded-full transition-all" style={{ width: `${pct}%` }} />
+        </div>
+        <p className="text-xs text-gray-500 dark:text-gray-400">
+          {usage.with_examples} of {usage.recent_total} responses were generated using learned examples.
+          {ratedUsed > 0 && (
+            <> Of those, rated: <span className="text-green-600 dark:text-green-400 font-medium">{usage.used_rated_good} 👍</span> · <span className="text-red-500 font-medium">{usage.used_rated_bad} 👎</span></>
+          )}
+        </p>
+      </div>
+
+      {corpus.active_by_platform.length > 0 && (
+        <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-5">
+          <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-200 mb-2">Examples by platform</h3>
+          <div className="flex flex-wrap gap-2">
+            {corpus.active_by_platform.map((p) => (
+              <span key={p.platform} className="px-2.5 py-1 rounded-full text-xs font-medium bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-300">
+                {p.platform}: {p.count}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-5">
+        <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-200 mb-3">Most used examples</h3>
+        {top_examples.length === 0 ? (
+          <p className="text-xs text-gray-400">No examples have been injected yet — they start counting as soon as rated cases match new tickets.</p>
+        ) : (
+          <div className="space-y-2">
+            {top_examples.map((ex) => (
+              <div key={ex.id} className="flex items-center gap-3 text-sm">
+                <span className="flex-shrink-0 w-14 text-center px-2 py-0.5 rounded-full bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300 text-xs font-bold">{ex.uses}×</span>
+                <span className={`flex-shrink-0 text-xs px-2 py-0.5 rounded-full ${ex.corrected ? 'bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-300' : 'bg-green-50 dark:bg-green-900/30 text-green-600 dark:text-green-300'}`}>
+                  {ex.corrected ? 'correction' : '👍'}
+                </span>
+                <span className="text-gray-700 dark:text-gray-300 truncate">{ex.problem}</span>
+                {ex.platform_name && <span className="text-xs text-gray-400 flex-shrink-0">{ex.platform_name}</span>}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 export default function ReviewQueue() {
-  const [tab, setTab] = useState('queue') // 'queue' | 'recent'
+  const [tab, setTab] = useState('queue') // 'queue' | 'recent' | 'learning'
   const [items, setItems] = useState([])
   const [recent, setRecent] = useState([])
+  const [stats, setStats] = useState(null)
   const [loading, setLoading] = useState(true)
 
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const [queueRes, recentRes] = await Promise.all([
+      const [queueRes, recentRes, statsRes] = await Promise.all([
         client.get('/history/review-queue'),
         client.get('/history/recent-responses'),
+        client.get('/history/learning-stats'),
       ])
       setItems(queueRes.data.items || [])
       setRecent(recentRes.data.items || [])
+      setStats(statsRes.data)
     } catch (err) {
       toast.error(err.response?.data?.detail || 'Failed to load review queue')
     } finally { setLoading(false) }
@@ -248,6 +328,9 @@ export default function ReviewQueue() {
             <button onClick={() => setTab('recent')} className={tabClass('recent')}>
               Recent responses
             </button>
+            <button onClick={() => setTab('learning')} className={tabClass('learning')}>
+              📚 Learning
+            </button>
           </div>
           <button onClick={load} className="text-sm text-blue-600 dark:text-blue-400 hover:underline">↺ Refresh</button>
         </div>
@@ -267,6 +350,8 @@ export default function ReviewQueue() {
               items.map((item) => <QueueItem key={item.id} item={item} onDone={removeFromQueue} />)
             )}
           </>
+        ) : tab === 'learning' ? (
+          <LearningTab stats={stats} />
         ) : (
           <>
             <p className="text-sm text-gray-500 dark:text-gray-400">

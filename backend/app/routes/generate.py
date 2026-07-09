@@ -267,12 +267,13 @@ def _build_agent_notes(agent_notes: str, cms_account: dict) -> str:
     return "\n\n".join(parts) if parts else None
 
 
-def _learned_examples_block(db, embedding_service, query_embedding, platform_id) -> str:
-    """Top-3 rated past interactions similar to the incoming message, as a prompt block.
+def _learned_examples_block(db, embedding_service, query_embedding, platform_id):
+    """Top-3 rated past interactions similar to the incoming message.
 
-    Uses feedback='useful' responses and developer-corrected 'not_useful' ones
-    (corrections ranked first). Fail-open: any error returns '' and /generate
-    behaves exactly as without this feature.
+    Returns (prompt_block, used) where used = [{id, similarity, corrected}] for
+    tracking which examples were injected. Uses feedback='useful' responses and
+    developer-corrected 'not_useful' ones (corrections ranked first). Fail-open:
+    any error returns ('', []) and /generate behaves exactly as without this feature.
     """
     try:
         from sqlalchemy import or_, and_
@@ -307,15 +308,16 @@ def _learned_examples_block(db, embedding_service, query_embedding, platform_id)
                 continue
             pd = r.parsed_data if isinstance(r.parsed_data, dict) else {}
             summary = (pd.get("problem_summary") or "").strip()
-            scored.append((is_corrected, sim, summary, r.customer_message, response_text))
+            scored.append((is_corrected, sim, r.id, summary, r.customer_message, response_text))
         if not scored:
-            return ""
+            return "", []
         scored.sort(key=lambda x: (0 if x[0] else 1, -x[1]))  # corrections first, then similarity
         parts = [
             "LEARNED EXAMPLES (responses to similar past interactions, rated by the team — "
             "follow their content, decisions and style whenever they apply to this case):"
         ]
-        for i, (is_corrected, sim, summary, msg, resp) in enumerate(scored[:3], 1):
+        used = []
+        for i, (is_corrected, sim, rid, summary, msg, resp) in enumerate(scored[:3], 1):
             label = "developer-corrected" if is_corrected else "rated good"
             summary_line = f"Problem: {summary}\n" if summary else ""
             parts.append(
@@ -324,9 +326,10 @@ def _learned_examples_block(db, embedding_service, query_embedding, platform_id)
                 f"Customer message: {msg[:600]}\n"
                 f"Good response:\n{resp}"
             )
-        return "\n".join(parts)
+            used.append({"id": rid, "similarity": round(sim, 3), "corrected": is_corrected})
+        return "\n".join(parts), used
     except Exception:
-        return ""
+        return "", []
 
 
 @router.post("/generate", response_model=GenerateResponse)
@@ -620,7 +623,7 @@ async def generate(
             faq_context = (canned_block + "\n\n" + faq_context).strip()
 
     # Learned examples from rated past interactions (feedback loop)
-    learned_block = _learned_examples_block(db, embedding_service, query_embedding, request.platform_id)
+    learned_block, learned_used = _learned_examples_block(db, embedding_service, query_embedding, request.platform_id)
     if learned_block:
         faq_context = (learned_block + "\n\n" + faq_context).strip()
 
@@ -708,6 +711,7 @@ async def generate(
             parsed_data=parsed_dict,
             generated_response=customer_response,
             platform_id=request.platform_id,
+            learned_examples=learned_used or None,
         )
         db.add(_hist)
     haiku_cost = parse_tokens["input"] * _HAIKU_IN + parse_tokens["output"] * _HAIKU_OUT
@@ -738,4 +742,5 @@ async def generate(
         canned_sources=canned_sources,
         cache_hit=gen_tokens.get("cache_read", 0) > 0,
         history_id=_hist.id if _hist else None,
+        learned_count=len(learned_used),
     )

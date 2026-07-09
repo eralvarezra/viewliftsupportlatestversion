@@ -134,6 +134,7 @@ class GenerateResponse(BaseModel):
     canned_sources: List[CannedSource] = []
     cache_hit: bool = False
     history_id: Optional[int] = None
+    learned_count: int = 0
 
 
 # Platform schemas

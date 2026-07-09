@@ -56,6 +56,7 @@ export default function Generate() {
   const [generatedResponse, setGeneratedResponse] = useState('')
   const [historyId, setHistoryId] = useState(null)
   const [responseRating, setResponseRating] = useState(null) // 'useful' | 'not_useful' | null
+  const [learnedCount, setLearnedCount] = useState(0)
   const [nextSteps, setNextSteps] = useState(null)
   const [botNotes, setBotNotes] = useState(null)
   const [agentNotes, setAgentNotes] = useState("")
@@ -222,6 +223,7 @@ export default function Generate() {
       setCannedSources(response.data.canned_sources || [])
       setHistoryId(response.data.history_id || null)
       setResponseRating(null)
+      setLearnedCount(response.data.learned_count || 0)
       return response.data
     } catch (error) {
       const msg = apiErr(error, 'Failed to generate response. Please try again.')
@@ -276,6 +278,7 @@ export default function Generate() {
       setCannedSources(response.data.canned_sources || [])
       setHistoryId(response.data.history_id || null)
       setResponseRating(null)
+      setLearnedCount(response.data.learned_count || 0)
 
       if (response.data.needs_verification) {
         toast('CMS verification required — attach a screenshot to continue', { icon: '⚠️' })
@@ -1507,6 +1510,14 @@ end_of_access: 2026-05-18`}
                         Fresh
                       </span>
                     )
+                  )}
+                  {generatedResponse && learnedCount > 0 && (
+                    <span
+                      title={`This response used ${learnedCount} learned example${learnedCount > 1 ? 's' : ''} from rated past interactions`}
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300"
+                    >
+                      📚 {learnedCount} learned
+                    </span>
                   )}
                   {generatedResponse && historyId && (
                     <div className="flex items-center gap-1 ml-1">

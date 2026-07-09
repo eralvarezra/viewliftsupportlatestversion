@@ -61,6 +61,8 @@ def run_migrations():
             conn.execute(text("ALTER TABLE response_history ADD COLUMN corrected_response TEXT"))
         if "review_status" not in cols:
             conn.execute(text("ALTER TABLE response_history ADD COLUMN review_status TEXT"))
+        if "learned_examples" not in cols:
+            conn.execute(text("ALTER TABLE response_history ADD COLUMN learned_examples TEXT"))
 
         # Seed platforms and ensure all expected platforms exist
         existing_slugs = {r[0] for r in conn.execute(text("SELECT slug FROM platforms")).fetchall()}
