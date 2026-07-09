@@ -205,6 +205,8 @@ class ReviewQueueItem(BaseModel):
     created_at: datetime
     platform_name: Optional[str] = None
     agent_username: Optional[str] = None
+    feedback: Optional[str] = None
+    review_status: Optional[str] = None
 
 
 class ReviewQueueResponse(BaseModel):

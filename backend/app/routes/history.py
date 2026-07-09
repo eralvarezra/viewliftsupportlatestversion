@@ -184,6 +184,37 @@ async def get_review_queue(
     return ReviewQueueResponse(count=len(items), items=items)
 
 
+@router.get("/recent-responses", response_model=ReviewQueueResponse)
+async def get_recent_responses(
+    limit: int = Query(50, le=200),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Recent generated responses across all agents, with rating state (superadmin)."""
+    _require_superadmin(current_user)
+    entries = (
+        db.query(ResponseHistory)
+        .order_by(ResponseHistory.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    items = [
+        ReviewQueueItem(
+            id=e.id,
+            customer_name=e.customer_name,
+            customer_message=e.customer_message,
+            generated_response=e.generated_response,
+            created_at=e.created_at,
+            platform_name=e.platform.name if e.platform else None,
+            agent_username=e.user.username if e.user else None,
+            feedback=e.feedback,
+            review_status=e.review_status,
+        )
+        for e in entries
+    ]
+    return ReviewQueueResponse(count=len(items), items=items)
+
+
 @router.post("/{history_id}/correct")
 async def correct_response(
     history_id: int,
@@ -258,10 +289,11 @@ async def update_feedback(
     if request.feedback not in ("useful", "not_useful"):
         raise HTTPException(status_code=400, detail="Feedback must be 'useful' or 'not_useful'")
 
-    entry = db.query(ResponseHistory).filter(
-        ResponseHistory.id == history_id,
-        ResponseHistory.user_id == current_user.id,
-    ).first()
+    # Agents can only rate their own responses; superadmin can rate anyone's (Review Queue history)
+    query = db.query(ResponseHistory).filter(ResponseHistory.id == history_id)
+    if not getattr(current_user, "is_superadmin", False):
+        query = query.filter(ResponseHistory.user_id == current_user.id)
+    entry = query.first()
 
     if not entry:
         raise HTTPException(status_code=404, detail="History entry not found")
