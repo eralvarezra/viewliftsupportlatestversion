@@ -79,6 +79,9 @@ export default function Header() {
       { to: '/faqs', label: 'FAQs' },
       { to: '/users', label: 'Users' },
     ] : []),
+    ...(isAdmin && user?.is_superadmin ? [
+      { to: '/review-queue', label: 'Review Queue' },
+    ] : []),
   ]
 
   return (

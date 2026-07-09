@@ -11,6 +11,7 @@ import Tracker from './pages/Tracker'
 import Profile from './pages/Profile'
 import Reports from './pages/Reports'
 import OpenTickets from './pages/OpenTickets'
+import ReviewQueue from './pages/ReviewQueue'
 import ProtectedRoute from './components/ProtectedRoute'
 import { PlatformProvider } from './context/PlatformContext'
 import { CoverProvider } from './context/CoverContext'
@@ -98,6 +99,14 @@ function App() {
           element={
             <ProtectedRoute>
               <OpenTickets />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/review-queue"
+          element={
+            <ProtectedRoute>
+              <ReviewQueue />
             </ProtectedRoute>
           }
         />
