@@ -4,7 +4,6 @@ import Login from './pages/Login'
 import Register from './pages/Register'
 import Generate from './pages/Generate'
 import FAQs from './pages/FAQs'
-import History from './pages/History'
 import Users from './pages/Users'
 import Insights from './pages/Insights'
 import Tracker from './pages/Tracker'
@@ -43,14 +42,6 @@ function App() {
           element={
             <ProtectedRoute>
               <FAQs />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/history"
-          element={
-            <ProtectedRoute>
-              <History />
             </ProtectedRoute>
           }
         />

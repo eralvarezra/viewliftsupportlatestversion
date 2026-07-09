@@ -65,7 +65,6 @@ export default function Header() {
 
   const navLinks = [
     { to: '/generate', label: 'Generate' },
-    { to: '/history', label: 'B2C Responses' },
     { to: '/tracker', label: 'Tracker' },
     { to: '/insights', label: 'Daily Update' },
     ...(isAdmin && user?.is_superadmin ? [
