@@ -267,6 +267,60 @@ def _build_agent_notes(agent_notes: str, cms_account: dict) -> str:
     return "\n\n".join(parts) if parts else None
 
 
+def _learned_examples_block(db, embedding_service, query_embedding, platform_id) -> str:
+    """Top-3 rated past interactions similar to the incoming message, as a prompt block.
+
+    Uses feedback='useful' responses and developer-corrected 'not_useful' ones
+    (corrections ranked first). Fail-open: any error returns '' and /generate
+    behaves exactly as without this feature.
+    """
+    try:
+        from sqlalchemy import or_, and_
+        rows = (
+            db.query(ResponseHistory)
+            .filter(ResponseHistory.platform_id == platform_id)
+            .filter(ResponseHistory.message_embedding.isnot(None))
+            .filter(or_(
+                ResponseHistory.feedback == "useful",
+                and_(
+                    ResponseHistory.feedback == "not_useful",
+                    ResponseHistory.corrected_response.isnot(None),
+                    ResponseHistory.review_status == "corrected",
+                ),
+            ))
+            .order_by(ResponseHistory.created_at.desc())
+            .limit(500)
+            .all()
+        )
+        scored = []
+        for r in rows:
+            emb = embedding_service.deserialize_embedding(r.message_embedding)
+            sim = embedding_service.cosine_similarity(query_embedding, emb)
+            if sim < 0.60:
+                continue
+            is_corrected = r.feedback == "not_useful"
+            response_text = r.corrected_response if is_corrected else r.generated_response
+            if response_text:
+                scored.append((is_corrected, sim, r.customer_message, response_text))
+        if not scored:
+            return ""
+        scored.sort(key=lambda x: (0 if x[0] else 1, -x[1]))  # corrections first, then similarity
+        parts = [
+            "LEARNED EXAMPLES (responses to similar past interactions, rated by the team — "
+            "follow their content, decisions and style whenever they apply to this case):"
+        ]
+        for i, (is_corrected, sim, msg, resp) in enumerate(scored[:3], 1):
+            label = "developer-corrected" if is_corrected else "rated good"
+            parts.append(
+                f"\n[Example {i} — {label}, similarity {sim:.2f}]\n"
+                f"Customer message: {msg[:600]}\n"
+                f"Good response:\n{resp}"
+            )
+        return "\n".join(parts)
+    except Exception:
+        return ""
+
+
 @router.post("/generate", response_model=GenerateResponse)
 async def generate(
     request: GenerateRequest,
@@ -556,6 +610,11 @@ async def generate(
             for title, content, score in canned_matches:
                 canned_block += f"\n[{title}]\n{content}\n"
             faq_context = (canned_block + "\n\n" + faq_context).strip()
+
+    # Learned examples from rated past interactions (feedback loop)
+    learned_block = _learned_examples_block(db, embedding_service, query_embedding, request.platform_id)
+    if learned_block:
+        faq_context = (learned_block + "\n\n" + faq_context).strip()
 
     # account_number is excluded from billing context to prevent the model from
     # using it to infer payment handler (e.g. "apple-xxx" prefix is a CMS artifact, not Apple billing)
