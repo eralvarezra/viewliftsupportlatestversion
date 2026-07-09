@@ -304,7 +304,9 @@ def _learned_examples_block(db, embedding_service, query_embedding, platform_id)
             # excluded even if someone rated them by mistake.
             if not response_text or response_text.lstrip().startswith("[NEEDS_VERIFICATION]"):
                 continue
-            scored.append((is_corrected, sim, r.customer_message, response_text))
+            pd = r.parsed_data if isinstance(r.parsed_data, dict) else {}
+            summary = (pd.get("problem_summary") or "").strip()
+            scored.append((is_corrected, sim, summary, r.customer_message, response_text))
         if not scored:
             return ""
         scored.sort(key=lambda x: (0 if x[0] else 1, -x[1]))  # corrections first, then similarity
@@ -312,10 +314,12 @@ def _learned_examples_block(db, embedding_service, query_embedding, platform_id)
             "LEARNED EXAMPLES (responses to similar past interactions, rated by the team — "
             "follow their content, decisions and style whenever they apply to this case):"
         ]
-        for i, (is_corrected, sim, msg, resp) in enumerate(scored[:3], 1):
+        for i, (is_corrected, sim, summary, msg, resp) in enumerate(scored[:3], 1):
             label = "developer-corrected" if is_corrected else "rated good"
+            summary_line = f"Problem: {summary}\n" if summary else ""
             parts.append(
                 f"\n[Example {i} — {label}, similarity {sim:.2f}]\n"
+                f"{summary_line}"
                 f"Customer message: {msg[:600]}\n"
                 f"Good response:\n{resp}"
             )
