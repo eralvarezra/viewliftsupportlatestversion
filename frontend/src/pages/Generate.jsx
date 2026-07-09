@@ -57,6 +57,12 @@ export default function Generate() {
   const [historyId, setHistoryId] = useState(null)
   const [responseRating, setResponseRating] = useState(null) // 'useful' | 'not_useful' | null
   const [learnedCount, setLearnedCount] = useState(0)
+  // Bot-maintained Freshdesk ticket summary — per-agent preference (opt-out)
+  const [updateSummary, setUpdateSummary] = useState(() => localStorage.getItem('updateTicketSummary') !== 'false')
+  const toggleUpdateSummary = () => setUpdateSummary(v => {
+    localStorage.setItem('updateTicketSummary', String(!v))
+    return !v
+  })
   const [nextSteps, setNextSteps] = useState(null)
   const [botNotes, setBotNotes] = useState(null)
   const [agentNotes, setAgentNotes] = useState("")
@@ -624,7 +630,16 @@ export default function Generate() {
     const replyBody = previewEditRef.current ? previewEditRef.current.innerHTML : generatedResponse
     setIsSending(true)
     try {
-      await client.post(`/freshdesk/ticket/${fdTicket.id}/reply`, { body: replyBody, ...(coverUserId ? { cover_user_id: coverUserId } : {}) })
+      const replyRes = await client.post(`/freshdesk/ticket/${fdTicket.id}/reply`, {
+        body: replyBody,
+        update_summary: updateSummary,
+        problem_summary: parsedInfo?.problem_summary || null,
+        ...(coverUserId ? { cover_user_id: coverUserId } : {}),
+      })
+      const summaryStatus = replyRes.data?.summary
+      if (summaryStatus === 'created' || summaryStatus === 'updated') {
+        toast.success(`Ticket summary ${summaryStatus}`, { icon: '📝' })
+      }
       const cmsNote = cmsInfo?.found ? buildCmsNote(cmsInfo) : null
       const hasNoteContent = cmsNote || noteImages.length > 0
       if (hasNoteContent) {
@@ -1816,7 +1831,17 @@ end_of_access: 2026-05-18`}
                 </div>
               )}
             </div>
-            <div className="flex justify-end gap-3 px-6 py-4 border-t border-gray-200 dark:border-gray-700">
+            <div className="flex items-center justify-between gap-3 px-6 py-4 border-t border-gray-200 dark:border-gray-700">
+              <label className="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400 cursor-pointer select-none" title="The bot writes/updates the ticket summary in Freshdesk after sending. It never overwrites a summary written by a person.">
+                <input
+                  type="checkbox"
+                  checked={updateSummary}
+                  onChange={toggleUpdateSummary}
+                  className="rounded border-gray-300 dark:border-gray-600 text-blue-600 focus:ring-blue-400"
+                />
+                📝 Update ticket summary
+              </label>
+              <div className="flex items-center gap-3">
               <button onClick={() => setShowPreview(false)} className="px-4 py-2 text-sm text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200">Cancel</button>
               <button
                 onClick={handleSendReply}
@@ -1833,6 +1858,7 @@ end_of_access: 2026-05-18`}
                   </>
                 ) : 'Send Reply'}
               </button>
+              </div>
             </div>
           </div>
         </div>

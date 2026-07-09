@@ -237,6 +237,60 @@ async def get_freshdesk_status(
         "message": None,
     }
 
+# ── Bot-maintained ticket summary ────────────────────────────────────────────
+# Invisible zero-width marker appended to summaries the bot writes, so it can
+# recognize its own summary and keep updating it — while NEVER touching a
+# summary a human wrote (no marker → skip).
+BOT_SUMMARY_MARKER = "\u200b\u200d\u200b\u200d\u200b"  # ZWSP+ZWJ sequence, invisible when rendered
+
+
+def _upsert_ticket_summary(ticket_id: int, auth, problem_summary: str, reply_text: str) -> str:
+    """Create/update the Freshdesk ticket summary. Best-effort: never raises."""
+    try:
+        r = requests.get(f"{FRESHDESK_BASE}/tickets/{ticket_id}/summary", auth=auth, timeout=10)
+        if r.status_code == 200:
+            existing = r.json() or {}
+            existing_text = (existing.get("body") or "") + (existing.get("body_text") or "")
+            if BOT_SUMMARY_MARKER not in existing_text:
+                return "skipped_human"  # a person wrote it — never touch
+        elif r.status_code != 404:  # 404 = no summary yet → create
+            return f"error_get_{r.status_code}"
+
+        import re as _re
+        from app.services.claude_client import ClaudeClient
+        plain_reply = _re.sub(r"<[^>]+>", " ", reply_text or "")[:1500]
+        claude = ClaudeClient()
+        msg = claude.client.messages.create(
+            model=ClaudeClient.PARSE_MODEL,
+            max_tokens=300,
+            temperature=0.2,
+            messages=[{
+                "role": "user",
+                "content": (
+                    "Write a support-ticket summary in 3-4 short plain-text lines: "
+                    "(1) the customer's issue, (2) current state of the case, "
+                    "(3) latest action taken by support. No greeting, no markdown, "
+                    "no field labels — just the summary text.\n\n"
+                    f"Customer issue: {problem_summary or '(derive it from the reply below)'}\n\n"
+                    f"Latest support reply sent to the customer:\n{plain_reply}"
+                ),
+            }],
+        )
+        summary_text = msg.content[0].text.strip()
+        body_html = summary_text.replace("\n", "<br>") + BOT_SUMMARY_MARKER
+        pr = requests.put(
+            f"{FRESHDESK_BASE}/tickets/{ticket_id}/summary",
+            auth=auth,
+            json={"body": body_html},
+            timeout=10,
+        )
+        if pr.status_code in (200, 201):
+            return "updated" if r.status_code == 200 else "created"
+        return f"error_put_{pr.status_code}"
+    except Exception as e:
+        return f"error_{type(e).__name__}"
+
+
 @router.post("/ticket/{ticket_id}/reply")
 async def post_freshdesk_reply(
     ticket_id: int,
@@ -283,7 +337,18 @@ async def post_freshdesk_reply(
         raise _rate_limit_error(r)
     if r.status_code not in (200, 201):
         raise HTTPException(status_code=502, detail=f"Freshdesk returned {r.status_code}: {r.text[:200]}")
-    return {"ok": True}
+
+    # Optional bot-maintained ticket summary (agent toggle). Best-effort: a
+    # summary failure never fails the reply that was already sent.
+    summary_status = None
+    if payload.get("update_summary"):
+        summary_status = _upsert_ticket_summary(
+            ticket_id,
+            auth,
+            problem_summary=payload.get("problem_summary") or "",
+            reply_text=body_html,
+        )
+    return {"ok": True, "summary": summary_status}
 
 @router.post("/ticket/{ticket_id}/note")
 async def post_freshdesk_note(
