@@ -312,8 +312,12 @@ class ClaudeClient:
             generated_at=datetime.now(timezone.utc),
         )
 
-    def analyze_daily_update(self, tickets: list) -> dict:
-        """Analyze a list of Freshdesk ticket dicts from CSV and group by problem."""
+    def analyze_daily_update(self, tickets: list, history_context: str = "") -> dict:
+        """Analyze a list of Freshdesk ticket dicts from CSV and group by problem.
+
+        history_context: compact summary of recent daily reports so the model can
+        spot recurring/escalating patterns across days (deeper analysis, especially
+        on low-volume days)."""
         import json as _json
 
         # Build compact ticket list and a lookup of ticket_id -> platform for enforcement
@@ -342,8 +346,14 @@ class ClaudeClient:
 
         tickets_text = "\n".join(lines)
 
-        prompt = f"""You are analyzing a Freshdesk daily ticket export. Group these tickets by similar problem type and return a JSON report.
+        history_block = (
+            f"\nRECENT DAILY REPORTS (context from previous days — use it to judge whether "
+            f"today's issues are new, recurring, or escalating; do NOT copy its tickets into today's groups):\n"
+            f"{history_context}\n" if history_context.strip() else ""
+        )
 
+        prompt = f"""You are a senior support analyst writing the daily ticket analysis for company leadership. Group today's tickets by problem type AND provide real analysis — leadership explicitly asked for deeper dives, root-cause thinking, and cross-day pattern detection, especially on low-volume days.
+{history_block}
 TICKET DATA (use ONLY what is explicitly stated here — do NOT invent any information):
 {tickets_text}
 
@@ -364,6 +374,14 @@ INSTRUCTIONS:
   * platforms: list containing the single Platform value shared by all tickets in this group — empty list [] if Platform is blank for all tickets, never use "None" as a value
   * trend: volume indicator — "high" if 3 or more tickets, "medium" if exactly 2, "low" if 1
 
+ANALYSIS SECTIONS (this is what leadership reads — never leave them shallow):
+- "emerging": clusters of only 1-2 tickets that hint at a possible NEW issue worth watching (same fields as groups). Only real signals — do not force one if nothing stands out. On low-volume days these matter most.
+- "deep_dives": one entry per Platform that has ANY tickets today:
+  * platform: the Platform value
+  * assessment: 3-5 sentences of real analysis — what is happening on this platform today, the most likely root cause(s), and whether it is new, recurring, or escalating compared with the RECENT DAILY REPORTS above. If the pattern suggests something larger is going on (product bug, billing flow problem, store/platform change), say so explicitly. If today is quiet, analyze WHY it might be quiet and what the recent-days pattern shows.
+  * recommendation: 1-2 concrete next actions for the support/product team
+- "analyst_summary": 3-4 sentences for leadership: overall state of the day, the single biggest risk, and what to watch tomorrow. On low-volume days go DEEPER (use the recent-days context), never shorter.
+
 STRICT RULES:
 - Every ticket_id in a group must have the same Platform value — verify before outputting
 - Only include devices, tags, clients, platforms that appear in the raw data above
@@ -371,6 +389,7 @@ STRICT RULES:
 - ticket_ids must be integers
 - tags must be individual tag strings, not comma-separated
 - trend must be exactly "high", "medium", or "low"
+- assessments must be grounded in the ticket data and recent-reports context — no invented facts
 
 Return ONLY valid JSON, no markdown, no explanation:
 {{
@@ -385,7 +404,27 @@ Return ONLY valid JSON, no markdown, no explanation:
       "platforms": ["SCHN+"],
       "trend": "high"
     }}
-  ]
+  ],
+  "emerging": [
+    {{
+      "title": "...",
+      "description": "...",
+      "ticket_ids": [12347],
+      "clients": ["Name"],
+      "tags": ["tag"],
+      "devices": [],
+      "platforms": ["FOX One B2C"],
+      "trend": "low"
+    }}
+  ],
+  "deep_dives": [
+    {{
+      "platform": "SCHN+",
+      "assessment": "...",
+      "recommendation": "..."
+    }}
+  ],
+  "analyst_summary": "..."
 }}"""
 
         response = self.client.messages.create(
@@ -436,6 +475,9 @@ Return ONLY valid JSON, no markdown, no explanation:
                             "trend": "high" if len(plat_tids) >= 3 else "medium" if len(plat_tids) == 2 else "low",
                         })
             data["groups"] = clean_groups
+            data.setdefault("emerging", [])
+            data.setdefault("deep_dives", [])
+            data.setdefault("analyst_summary", "")
             return data, tokens
         except (json.JSONDecodeError, ValueError) as exc:
             raise RuntimeError(f"analyze_daily_update: failed to parse Claude response: {exc}") from exc

@@ -581,6 +581,9 @@ export default function DailyUpdate() {
 
     let msg = '*Daily Update — ' + date + '*\n'
     msg += result.total_tickets + ' tickets analyzed • ' + (result.groups?.length || 0) + ' groups found\n'
+    if (result.analyst_summary) {
+      msg += '\n*📋 Analyst Summary*\n' + result.analyst_summary + '\n'
+    }
     msg += '\n'
 
     msg += '*🔴 High Trend Issues*\n'
@@ -598,7 +601,7 @@ export default function DailyUpdate() {
       if (cl === 'Other') return
       msg += '\n*' + cl + '*\n'
       if (groups.length === 0) {
-        msg += '  _No new trends identified_\n'
+        msg += '  _No 3+ ticket trends today — see deep dive below_\n'
       } else {
         groups.forEach(g => {
           msg += '  • *' + g.title + '* — ' + (g.ticket_ids?.length || 0) + ' tickets'
@@ -608,6 +611,26 @@ export default function DailyUpdate() {
         })
       }
     })
+
+    const emergingGroups = result.emerging || []
+    if (emergingGroups.length > 0) {
+      msg += '\n*🟡 Emerging Signals (1-2 tickets — watch list)*\n'
+      emergingGroups.forEach(g => {
+        const plat = (g.platforms || [])[0] || ''
+        msg += '  • *' + g.title + '*' + (plat ? ' (' + plat + ')' : '') + ' — ' + (g.ticket_ids?.length || 0) + ' ticket(s)\n'
+        if (g.description) msg += '    _' + g.description + '_\n'
+      })
+    }
+
+    const deepDives = result.deep_dives || []
+    if (deepDives.length > 0) {
+      msg += '\n*🔎 Deep Dive & Recommendations*\n'
+      deepDives.forEach(d => {
+        msg += '\n*' + d.platform + '*\n'
+        if (d.assessment) msg += d.assessment + '\n'
+        if (d.recommendation) msg += '👉 _' + d.recommendation + '_\n'
+      })
+    }
 
     msg += '\n*🔗 Tracker-Linked Groups*\n'
     if (trackerGroups.length === 0) {
@@ -942,15 +965,31 @@ export default function DailyUpdate() {
                 const already = Object.keys(clientMap).some(k => k.toLowerCase().includes(kc.split(' ')[0].toLowerCase()))
                 if (!already) clientMap[kc] = []
               })
+              const findDive = (client) => (result.deep_dives || []).find(d => {
+                const dp = (d.platform || '').toLowerCase()
+                const cl = client.toLowerCase()
+                return dp.includes(cl.split(' ')[0]) || cl.includes(dp.split(' ')[0])
+              })
               return (
                 <div className="space-y-6">
+                  {result.analyst_summary && (
+                    <div className="bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 rounded-lg p-4">
+                      <p className="text-xs font-bold uppercase tracking-widest text-purple-500 dark:text-purple-300 mb-1.5">📋 Analyst Summary</p>
+                      <p className="text-sm text-gray-700 dark:text-gray-300">{result.analyst_summary}</p>
+                    </div>
+                  )}
                   {Object.entries(clientMap).sort(([a], [b]) => a === 'Other' ? 1 : b === 'Other' ? -1 : a.localeCompare(b)).map(([client, groups]) => {
                     const pal = getClientPalette(client)
+                    const dive = groups.length === 0 ? findDive(client) : null
                     return (
                       <div key={client}>
                         <h5 className={`text-xs font-bold uppercase tracking-widest mb-2 pb-1 border-b ${pal.header}`}>{client}</h5>
                         {groups.length === 0 ? (
-                          <p className="text-xs text-gray-400 dark:text-gray-500 italic px-1 mb-1">No new trends identified</p>
+                          dive?.assessment ? (
+                            <p className="text-xs text-gray-500 dark:text-gray-400 px-1 mb-1">{dive.assessment}</p>
+                          ) : (
+                            <p className="text-xs text-gray-400 dark:text-gray-500 italic px-1 mb-1">No new trends identified</p>
+                          )
                         ) : (
                           <div className="space-y-3">
                             {groups.map((group, i) => (
@@ -961,6 +1000,35 @@ export default function DailyUpdate() {
                       </div>
                     )
                   })}
+                  {(result.emerging || []).length > 0 && (
+                    <div>
+                      <h5 className="text-xs font-bold uppercase tracking-widest mb-2 pb-1 border-b text-amber-500 dark:text-amber-400 border-amber-200 dark:border-amber-800">🟡 Emerging Signals (watch list)</h5>
+                      <div className="space-y-2">
+                        {result.emerging.map((g, i) => (
+                          <div key={i} className="bg-amber-50/50 dark:bg-amber-900/10 border border-amber-100 dark:border-amber-900/40 rounded-lg p-3">
+                            <p className="text-sm font-medium text-gray-800 dark:text-gray-200">
+                              {g.title} {(g.platforms || [])[0] && <span className="text-xs text-gray-400">({g.platforms[0]})</span>} — {g.ticket_ids?.length || 0} ticket(s)
+                            </p>
+                            {g.description && <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{g.description}</p>}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {(result.deep_dives || []).length > 0 && (
+                    <div>
+                      <h5 className="text-xs font-bold uppercase tracking-widest mb-2 pb-1 border-b text-indigo-500 dark:text-indigo-400 border-indigo-200 dark:border-indigo-800">🔎 Deep Dive & Recommendations</h5>
+                      <div className="space-y-3">
+                        {result.deep_dives.map((d, i) => (
+                          <div key={i} className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4">
+                            <p className="text-sm font-semibold text-gray-800 dark:text-white mb-1">{d.platform}</p>
+                            <p className="text-sm text-gray-600 dark:text-gray-300">{d.assessment}</p>
+                            {d.recommendation && <p className="text-sm text-blue-600 dark:text-blue-400 mt-2">👉 {d.recommendation}</p>}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )
             })()}

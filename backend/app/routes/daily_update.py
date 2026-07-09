@@ -27,6 +27,34 @@ FRESHDESK_AUTH = (settings.FRESHDESK_API_KEY, "X")
 
 
 
+def _build_history_context(db: Session, days: int = 7, max_reports: int = 10) -> str:
+    """Compact summary of recent daily reports so the model can spot patterns
+    across days (recurring/escalating issues). One line per report."""
+    from datetime import timedelta
+    cutoff = datetime.utcnow() - timedelta(days=days)
+    reports = (
+        db.query(DailyUpdateReport)
+        .filter(DailyUpdateReport.created_at >= cutoff)
+        .order_by(DailyUpdateReport.created_at.desc())
+        .limit(max_reports)
+        .all()
+    )
+    lines = []
+    for r in reversed(reports):  # chronological order
+        date = r.created_at.strftime("%Y-%m-%d") if r.created_at else "?"
+        rj = r.result_json or {}
+        groups = rj.get("groups", []) + rj.get("emerging", [])
+        if groups:
+            gdesc = "; ".join(
+                f"{(g.get('platforms') or ['?'])[0]}: {g.get('title', '?')} ({len(g.get('ticket_ids', []))} tickets)"
+                for g in groups[:12]
+            )
+            lines.append(f"{date} — {r.total_tickets} tickets: {gdesc}")
+        else:
+            lines.append(f"{date} — {r.total_tickets} tickets: no significant groups")
+    return "\n".join(lines)
+
+
 def _fetch_ticket(ticket_id: int, auth=None) -> dict | None:
     import time
     _auth = auth or FRESHDESK_AUTH
@@ -231,9 +259,10 @@ async def analyze_daily_update(
             }
         tracker_groups[tr_id]["ticket_ids"].append(tid)
 
-    # 3. Run Claude analysis
+    # 3. Run Claude analysis (with recent-days context for cross-day pattern detection)
     claude = ClaudeClient(api_key=settings.ANTHROPIC_API_KEY)
-    result, du_tokens = claude.analyze_daily_update(tickets)
+    history_context = _build_history_context(db)
+    result, du_tokens = claude.analyze_daily_update(tickets, history_context=history_context)
 
     # 4. Annotate groups with tracker info
     for group in result.get("groups", []):
