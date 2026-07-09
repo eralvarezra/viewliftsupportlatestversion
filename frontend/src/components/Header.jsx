@@ -6,6 +6,7 @@ import { usePlatform } from '../context/PlatformContext'
 import { useCover } from '../context/CoverContext'
 import client from '../api/client'
 import toast from 'react-hot-toast'
+import TrackerToday from './TrackerToday'
 
 export default function Header() {
   const { user, isAdmin, logout } = useAuth()
@@ -96,6 +97,7 @@ export default function Header() {
           </div>
 
           <div className="flex items-center gap-2">
+            <TrackerToday />
             {activePlatform && platforms.length > 1 && (
               <div className="relative" ref={platformRef}>
                 <button

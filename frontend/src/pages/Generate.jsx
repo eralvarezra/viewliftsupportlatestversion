@@ -135,10 +135,6 @@ export default function Generate() {
     43000662781: 10,  // DIRTVision Support -> DIRTVision
   }
 
-  const [trackerLogs, setTrackerLogs] = useState([])
-  const [trackerStats, setTrackerStats] = useState({ today_count: 0, daily_goal: 35 })
-  const [trackerPage, setTrackerPage] = useState(1)
-  const TRACKER_PAGE_SIZE = 10
 
   useEffect(() => {
     client.get('/settings').then(r => {
@@ -146,35 +142,6 @@ export default function Generate() {
     }).catch(() => {})
   }, [])
 
-  const refreshTracker = useCallback(async () => {
-    try {
-      const [logsRes, statsRes] = await Promise.all([
-        client.get('/ticket-tracker/'),
-        client.get('/ticket-tracker/stats'),
-      ])
-      setTrackerLogs(logsRes.data)
-      setTrackerStats(statsRes.data)
-    } catch { /* silently ignore */ }
-  }, [])
-
-  useEffect(() => {
-    refreshTracker()
-    // Light poll so the "Tracker Today" widget stays current without an F5.
-    const iv = setInterval(refreshTracker, 30000)
-    // Also refresh when the tab regains focus (agent comes back to it).
-    const onFocus = () => refreshTracker()
-    window.addEventListener('focus', onFocus)
-    return () => { clearInterval(iv); window.removeEventListener('focus', onFocus) }
-  }, [refreshTracker])
-
-  const getTodayLogs = (logs) => {
-    const today = new Date().toDateString()
-    return logs.filter(l => new Date(l.worked_at + 'Z').toDateString() === today)
-  }
-  const formatTrackerTime = (worked_at) =>
-    new Date(worked_at + 'Z').toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
-  const getTicketId = (url) =>
-    '#' + url.replace('https://viewlift.freshdesk.com/a/tickets/', '')
 
   useEffect(() => {
     // If this platform change was triggered by loadFdTicket, skip the destructive reset
@@ -677,7 +644,7 @@ export default function Generate() {
       }
       // Log reply to tracker, then refresh the widget so the count updates live.
       try { await client.post('/ticket-tracker/log-reply', { ticket_url: 'https://viewlift.freshdesk.com/a/tickets/' + fdTicket.id, ...(coverUserId ? { cover_user_id: coverUserId } : {}) }) } catch (_) {}
-      refreshTracker()
+      window.dispatchEvent(new Event('tracker-refresh'))
       if (statusOk) {
         toast.success('Reply sent — status set to Waiting on End User')
       } else {
@@ -1418,66 +1385,8 @@ end_of_access: 2026-05-18`}
           </div>
         </div>
 
-        {/* Right Panel - Output */}
+        {/* Center Panel - Response */}
         <div className="space-y-6 min-w-0">
-          {/* Parsed Information */}
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-6">
-            <h3 className="text-lg font-semibold text-gray-800 dark:text-white mb-4">Parsed Information</h3>
-
-            {parsedInfo ? (
-              <div className="space-y-2">
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="bg-gray-50 dark:bg-gray-700/60 rounded-md px-3 py-2">
-                    <label className="block text-xs font-semibold text-gray-400 dark:text-gray-400 uppercase tracking-wide">Customer Name</label>
-                    <p className="mt-0.5 text-sm text-gray-900 dark:text-gray-100 font-medium">{parsedInfo.customer_name || 'Not detected'}</p>
-                  </div>
-                  <div className="bg-gray-50 dark:bg-gray-700/60 rounded-md px-3 py-2">
-                    <label className="block text-xs font-semibold text-gray-400 dark:text-gray-400 uppercase tracking-wide">Email</label>
-                    <p className="mt-0.5 text-sm text-gray-900 dark:text-gray-100 font-medium truncate">{parsedInfo.customer_email || 'Not detected'}</p>
-                  </div>
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="bg-gray-50 dark:bg-gray-700/60 rounded-md px-3 py-2">
-                    <label className="block text-xs font-semibold text-gray-400 dark:text-gray-400 uppercase tracking-wide">Device</label>
-                    <p className="mt-0.5 text-sm text-gray-900 dark:text-gray-100 font-medium">{parsedInfo.device || 'Not detected'}</p>
-                  </div>
-                  <div className="bg-gray-50 dark:bg-gray-700/60 rounded-md px-3 py-2">
-                    <label className="block text-xs font-semibold text-gray-400 dark:text-gray-400 uppercase tracking-wide">Account Number</label>
-                    <p className="mt-0.5 text-sm text-gray-900 dark:text-gray-100 font-medium">{parsedInfo.account_number || 'Not detected'}</p>
-                 </div>
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="bg-gray-50 dark:bg-gray-700/60 rounded-md px-3 py-2">
-                    <label className="block text-xs font-semibold text-gray-400 dark:text-gray-400 uppercase tracking-wide">Ticket Type</label>
-                    <p className="mt-0.5 text-sm font-medium capitalize">
-                      {parsedInfo.ticket_type === 'billing' && <span className="text-amber-600 dark:text-amber-400">{parsedInfo.ticket_type}</span>}
-                      {parsedInfo.ticket_type === 'technical' && <span className="text-blue-600 dark:text-blue-400">{parsedInfo.ticket_type}</span>}
-                      {!parsedInfo.ticket_type && <span className="text-gray-400 dark:text-gray-500 italic">Not detected</span>}
-                    </p>
-                  </div>
-                  {cmsInfo?.payment_handler && (
-                    <div className="bg-gray-50 dark:bg-gray-700/60 rounded-md px-3 py-2">
-                      <label className="block text-xs font-semibold text-gray-400 dark:text-gray-400 uppercase tracking-wide">Payment Handler <span className="text-green-500 normal-case">(CMS)</span></label>
-                      <p className="mt-0.5 text-sm text-gray-900 dark:text-gray-100 font-medium">{cmsInfo.payment_handler}</p>
-                    </div>
-                  )}
-                </div>
-                <div className="bg-gray-50 dark:bg-gray-700/60 rounded-md px-3 py-2">
-                  <label className="block text-xs font-semibold text-gray-400 dark:text-gray-400 uppercase tracking-wide">Problem Summary</label>
-                  <p className="mt-0.5 text-sm text-gray-900 dark:text-gray-100">{parsedInfo.problem_summary || 'Not detected'}</p>
-                </div>
-                <div className="bg-gray-50 dark:bg-gray-700/60 rounded-md px-3 py-2">
-                  <label className="block text-xs font-semibold text-gray-400 dark:text-gray-400 uppercase tracking-wide">Context</label>
-                  <p className="mt-0.5 text-sm text-gray-700 dark:text-gray-300">{parsedInfo.context || 'Not detected'}</p>
-                </div>
-              </div>
-            ) : (
-              <div className="text-gray-400 dark:text-gray-500 text-center py-8">
-                <p>Parsed information will appear here</p>
-              </div>
-            )}
-          </div>
-
           {/* B2C No Account — shown when CMS lookup found nothing */}
           {(() => {
             // Alt emails from the thread are auto-tried during load, so if we're
@@ -1737,6 +1646,68 @@ end_of_access: 2026-05-18`}
             </div>
           )}
 
+        </div>
+
+        {/* Right Panel - Parsed & Sources */}
+        <div className="space-y-6 min-w-0">
+          {/* Parsed Information */}
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-6">
+            <h3 className="text-lg font-semibold text-gray-800 dark:text-white mb-4">Parsed Information</h3>
+
+            {parsedInfo ? (
+              <div className="space-y-2">
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="bg-gray-50 dark:bg-gray-700/60 rounded-md px-3 py-2">
+                    <label className="block text-xs font-semibold text-gray-400 dark:text-gray-400 uppercase tracking-wide">Customer Name</label>
+                    <p className="mt-0.5 text-sm text-gray-900 dark:text-gray-100 font-medium">{parsedInfo.customer_name || 'Not detected'}</p>
+                  </div>
+                  <div className="bg-gray-50 dark:bg-gray-700/60 rounded-md px-3 py-2">
+                    <label className="block text-xs font-semibold text-gray-400 dark:text-gray-400 uppercase tracking-wide">Email</label>
+                    <p className="mt-0.5 text-sm text-gray-900 dark:text-gray-100 font-medium truncate">{parsedInfo.customer_email || 'Not detected'}</p>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="bg-gray-50 dark:bg-gray-700/60 rounded-md px-3 py-2">
+                    <label className="block text-xs font-semibold text-gray-400 dark:text-gray-400 uppercase tracking-wide">Device</label>
+                    <p className="mt-0.5 text-sm text-gray-900 dark:text-gray-100 font-medium">{parsedInfo.device || 'Not detected'}</p>
+                  </div>
+                  <div className="bg-gray-50 dark:bg-gray-700/60 rounded-md px-3 py-2">
+                    <label className="block text-xs font-semibold text-gray-400 dark:text-gray-400 uppercase tracking-wide">Account Number</label>
+                    <p className="mt-0.5 text-sm text-gray-900 dark:text-gray-100 font-medium">{parsedInfo.account_number || 'Not detected'}</p>
+                 </div>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="bg-gray-50 dark:bg-gray-700/60 rounded-md px-3 py-2">
+                    <label className="block text-xs font-semibold text-gray-400 dark:text-gray-400 uppercase tracking-wide">Ticket Type</label>
+                    <p className="mt-0.5 text-sm font-medium capitalize">
+                      {parsedInfo.ticket_type === 'billing' && <span className="text-amber-600 dark:text-amber-400">{parsedInfo.ticket_type}</span>}
+                      {parsedInfo.ticket_type === 'technical' && <span className="text-blue-600 dark:text-blue-400">{parsedInfo.ticket_type}</span>}
+                      {!parsedInfo.ticket_type && <span className="text-gray-400 dark:text-gray-500 italic">Not detected</span>}
+                    </p>
+                  </div>
+                  {cmsInfo?.payment_handler && (
+                    <div className="bg-gray-50 dark:bg-gray-700/60 rounded-md px-3 py-2">
+                      <label className="block text-xs font-semibold text-gray-400 dark:text-gray-400 uppercase tracking-wide">Payment Handler <span className="text-green-500 normal-case">(CMS)</span></label>
+                      <p className="mt-0.5 text-sm text-gray-900 dark:text-gray-100 font-medium">{cmsInfo.payment_handler}</p>
+                    </div>
+                  )}
+                </div>
+                <div className="bg-gray-50 dark:bg-gray-700/60 rounded-md px-3 py-2">
+                  <label className="block text-xs font-semibold text-gray-400 dark:text-gray-400 uppercase tracking-wide">Problem Summary</label>
+                  <p className="mt-0.5 text-sm text-gray-900 dark:text-gray-100">{parsedInfo.problem_summary || 'Not detected'}</p>
+                </div>
+                <div className="bg-gray-50 dark:bg-gray-700/60 rounded-md px-3 py-2">
+                  <label className="block text-xs font-semibold text-gray-400 dark:text-gray-400 uppercase tracking-wide">Context</label>
+                  <p className="mt-0.5 text-sm text-gray-700 dark:text-gray-300">{parsedInfo.context || 'Not detected'}</p>
+                </div>
+              </div>
+            ) : (
+              <div className="text-gray-400 dark:text-gray-500 text-center py-8">
+                <p>Parsed information will appear here</p>
+              </div>
+            )}
+          </div>
+
           {/* Canned Responses Used */}
           {cannedSources.length > 0 && (
             <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-6">
@@ -1778,56 +1749,6 @@ end_of_access: 2026-05-18`}
           </div>
         </div>
 
-        {/* Tracker Today - Column 3 */}
-        <div>
-          {(() => {
-            const todayLogs = getTodayLogs(trackerLogs)
-            const totalPages = Math.max(1, Math.ceil(todayLogs.length / TRACKER_PAGE_SIZE))
-            const currentPage = Math.min(trackerPage, totalPages)
-            const pageLogs = todayLogs.slice((currentPage - 1) * TRACKER_PAGE_SIZE, currentPage * TRACKER_PAGE_SIZE)
-            return (
-              <div className="sticky top-4 bg-white dark:bg-gray-800 rounded-lg shadow-md overflow-hidden flex flex-col" style={{ maxHeight: 'calc(100vh - 6rem)' }}>
-                <div className="px-3 py-3 border-b border-gray-200 dark:border-gray-700 flex-shrink-0">
-                  <h3 className="text-xs font-semibold text-gray-600 dark:text-gray-300 uppercase tracking-wide">Tracker Today</h3>
-                  <div className="flex items-baseline gap-2 mt-1">
-                    <p className="text-xl font-bold text-blue-600 dark:text-blue-400 leading-none">
-                      {todayLogs.length}<span className="text-xs font-normal text-gray-400 ml-1">tickets</span>
-                    </p>
-                    <span className="text-xs text-gray-400">/ {trackerStats.daily_goal} goal</span>
-                  </div>
-                </div>
-                <div className="overflow-y-auto flex-1 divide-y divide-gray-100 dark:divide-gray-700">
-                  {todayLogs.length === 0 ? (
-                    <p className="text-xs text-gray-400 text-center py-6 px-3">No tickets today</p>
-                  ) : pageLogs.map(log => (
-                    <div key={log.id} className="flex items-center gap-2 px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors group">
-                      <span className="text-xs text-gray-400 font-mono flex-shrink-0 w-11">{formatTrackerTime(log.worked_at)}</span>
-                      <a href={log.ticket_url} target="_blank" rel="noopener noreferrer" className="text-xs font-medium text-blue-600 dark:text-blue-400 hover:underline truncate flex-1">
-                        {getTicketId(log.ticket_url)}
-                      </a>
-                      <button
-                        onClick={() => client.delete(`/ticket-tracker/${log.id}`).then(() => setTrackerLogs(prev => prev.filter(l => l.id !== log.id))).catch(() => {})}
-                        className="opacity-0 group-hover:opacity-100 text-gray-400 hover:text-red-500 dark:hover:text-red-400 transition-all flex-shrink-0"
-                        title="Delete"
-                      >
-                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                        </svg>
-                      </button>
-                    </div>
-                  ))}
-                </div>
-                {totalPages > 1 && (
-                  <div className="flex items-center justify-between px-3 py-2 border-t border-gray-200 dark:border-gray-700 flex-shrink-0">
-                    <button onClick={() => setTrackerPage(p => Math.max(1, p - 1))} disabled={currentPage === 1} className="text-xs text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 disabled:opacity-30 disabled:cursor-not-allowed px-1">‹ Prev</button>
-                    <span className="text-xs text-gray-400">{currentPage} / {totalPages}</span>
-                    <button onClick={() => setTrackerPage(p => Math.min(totalPages, p + 1))} disabled={currentPage === totalPages} className="text-xs text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 disabled:opacity-30 disabled:cursor-not-allowed px-1">Next ›</button>
-                  </div>
-                )}
-              </div>
-            )
-          })()}
-        </div>
       </div>
     </Layout>
 
