@@ -1183,7 +1183,9 @@ export default function Generate() {
                             CMS: {cmsInfo.name || cmsInfo.email}
                             {cmsInfo.is_subscribed
                               ? <span className="ml-2 px-1.5 py-0.5 rounded bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-400">Active subscriber</span>
-                              : <span className="ml-2 px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400">Not subscribed</span>
+                              : (cmsInfo.subscription_status || '').toUpperCase().includes('SUSPEND')
+                                ? <span className="ml-2 px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-400">Suspended</span>
+                                : <span className="ml-2 px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400">Not subscribed</span>
                             }
                           </p>
                           <a
@@ -1441,9 +1443,12 @@ end_of_access: 2026-05-18`}
             )
           })()}
 
-          {/* B2C No Subscription — email-aware: only suppress button if sent for this exact email */}
+          {/* B2C No Subscription — email-aware: only suppress button if sent for this exact email.
+              SUSPENDED accounts are excluded: the suspension IS the customer's problem, the
+              "no subscription" template would be wrong. */}
           {(() => {
             if (!cmsInfo?.found || cmsInfo?.is_subscribed || !fdTicket?.id) return null
+            if ((cmsInfo?.subscription_status || '').toUpperCase().includes('SUSPEND')) return null
             const msgLower = customerMessage.toLowerCase()
             const noSubMatch = msgLower.match(/unable to locate an active subscription associated with the email address\s+([\w._%+\-]+@[\w.\-]+\.[a-z]{2,})/i)
             const noSubSentEmail = noSubMatch ? noSubMatch[1].toLowerCase() : null

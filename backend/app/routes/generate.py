@@ -178,11 +178,19 @@ def _build_agent_notes(agent_notes: str, cms_account: dict) -> str:
     parts = []
     if cms_account and cms_account.get("found"):
         is_subscribed = cms_account.get("is_subscribed", False)
-        sub_status_line = (
-            "SUBSCRIBER STATUS: ACTIVE — has a valid active subscription. Do NOT suggest resubscribing or imply the subscription expired. Do NOT reveal specific plan details (price, renewal date, plan name, auto-renew status) to the customer — only confirm the account is active and address their actual issue."
-            if is_subscribed else
-            "SUBSCRIBER STATUS: INACTIVE — no active subscription found."
-        )
+        _sub_status = (cms_account.get("subscription_status") or "").upper()
+        if is_subscribed:
+            sub_status_line = "SUBSCRIBER STATUS: ACTIVE — has a valid active subscription. Do NOT suggest resubscribing or imply the subscription expired. Do NOT reveal specific plan details (price, renewal date, plan name, auto-renew status) to the customer — only confirm the account is active and address their actual issue."
+        elif "SUSPEND" in _sub_status:
+            sub_status_line = (
+                "SUBSCRIBER STATUS: SUSPENDED — the account EXISTS and has a subscription, but it is "
+                "SUSPENDED (typically a failed/declined renewal payment). This suspension is very likely "
+                "the customer's actual problem. Do NOT say they have no subscription and do NOT use the "
+                "'no subscription' template. Explain that the subscription is suspended and guide them to "
+                "update their payment method / complete the pending payment to reactivate access."
+            )
+        else:
+            sub_status_line = "SUBSCRIBER STATUS: INACTIVE — no active subscription found."
         lines = [
             "CMS ACCOUNT DATA (automatically retrieved — treat as CMS screenshot, do NOT output [NEEDS_VERIFICATION]):",
             f"  {sub_status_line}",
@@ -456,7 +464,11 @@ async def generate(
     _current_cms_email = ((request.cms_account or {}).get("email") or "").lower()
     _no_sub_already_sent = bool(_no_sub_sent_email and _current_cms_email and _no_sub_sent_email == _current_cms_email)
     _early_has_agent_notes = bool(request.agent_notes and request.agent_notes.strip())
-    if request.cms_no_subscription and parsed_data.ticket_type == "billing" and not _no_sub_already_sent and not _early_has_agent_notes:
+    # SUSPENDED is not "no subscription": the account exists and the suspension
+    # (usually a failed payment) IS the customer's problem — let the full flow
+    # handle it with the SUSPENDED context instead of the canned template.
+    _cms_suspended = "SUSPEND" in (((request.cms_account or {}).get("subscription_status")) or "").upper()
+    if request.cms_no_subscription and not _cms_suspended and parsed_data.ticket_type == "billing" and not _no_sub_already_sent and not _early_has_agent_notes:
         no_sub = db.query(CannedResponse).filter(
             CannedResponse.title == "B2C No Subscription"
         ).first()
