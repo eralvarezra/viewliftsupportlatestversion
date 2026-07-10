@@ -806,7 +806,10 @@ def _scan_eligible_pool(max_age_hours: int = 5, force: bool = False):
             any(k in spam_scan for k in SPAM_SUBJECT_KW)
             or _looks_like_phishing(t.get("subject", ""), description + " " + last_msg, att_names, has_agent_reply)
         )
-        spam = ("spam" in ttype) or ("auto reply" in ttype) or ("auto-reply" in ttype) \
+        # data.get("spam") is Freshdesk's own boolean set by "Mark as spam" —
+        # always authoritative (the type check alone missed it, see #344916).
+        spam = bool(data.get("spam")) or bool(data.get("deleted")) \
+            or ("spam" in ttype) or ("auto reply" in ttype) or ("auto-reply" in ttype) \
             or (heuristic_spam and not has_agent_reply)
 
         hrs = round((now - last_cust_dt).total_seconds() / 3600, 1)
@@ -879,18 +882,31 @@ def automated_claim_next(
         "WHERE claimed_by = :uid AND status = 'working' AND expires_at >= :now"
     ), {"uid": current_user.id, "now": now}).fetchone()
     if own:
-        db.execute(_sql("UPDATE automated_claims SET expires_at = :exp WHERE ticket_id = :tid"),
-                   {"exp": expires, "tid": own[0]})
-        db.commit()
-        t = next((x for x in _scan_eligible_pool(5) if x["id"] == own[0]), None)
-        if t is None:
-            t = {
-                "id": own[0],
-                "subject": own[1] or "",
-                "platform": own[2] or "",
-                "url": own[3] or f"https://{settings.FRESHDESK_DOMAIN}/a/tickets/{own[0]}",
-            }
-        return {"ticket": {**t, "resumed": True}}
+        # Same live spam/deleted check as fresh claims — the ticket may have
+        # been marked spam while the claim sat idle.
+        resumed_ok = True
+        try:
+            vr = requests.get(f"{FRESHDESK_BASE}/tickets/{own[0]}", auth=FRESHDESK_AUTH, timeout=8)
+            if vr.status_code == 200 and (vr.json().get("spam") or vr.json().get("deleted")):
+                db.execute(_sql("UPDATE automated_claims SET status='skipped' WHERE ticket_id=:tid"),
+                           {"tid": own[0]})
+                db.commit()
+                resumed_ok = False
+        except Exception:
+            pass
+        if resumed_ok:
+            db.execute(_sql("UPDATE automated_claims SET expires_at = :exp WHERE ticket_id = :tid"),
+                       {"exp": expires, "tid": own[0]})
+            db.commit()
+            t = next((x for x in _scan_eligible_pool(5) if x["id"] == own[0]), None)
+            if t is None:
+                t = {
+                    "id": own[0],
+                    "subject": own[1] or "",
+                    "platform": own[2] or "",
+                    "url": own[3] or f"https://{settings.FRESHDESK_DOMAIN}/a/tickets/{own[0]}",
+                }
+            return {"ticket": {**t, "resumed": True}}
 
     pool = _servable(_scan_eligible_pool(5))
 
@@ -920,6 +936,18 @@ def automated_claim_next(
         }).fetchone()
         db.commit()
         if row and row[0] == current_user.id:
+            # Final live check: the pool cache is up to 60s old and a human may
+            # have marked the ticket spam/deleted in the meantime (#344916 was
+            # served after being marked spam). One cheap GET closes the race.
+            try:
+                vr = requests.get(f"{FRESHDESK_BASE}/tickets/{t['id']}", auth=FRESHDESK_AUTH, timeout=8)
+                if vr.status_code == 200 and (vr.json().get("spam") or vr.json().get("deleted")):
+                    db.execute(_sql("UPDATE automated_claims SET status='skipped' WHERE ticket_id=:tid"),
+                               {"tid": t["id"]})
+                    db.commit()
+                    continue  # try the next ticket
+            except Exception:
+                pass  # verification is best-effort; serve the ticket on network issues
             return {"ticket": t}
         # Lost the race to another admin — try the next ticket.
 
