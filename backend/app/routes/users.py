@@ -132,7 +132,15 @@ async def delete_user(
     if user.role == "admin":
         raise HTTPException(status_code=400, detail="Cannot delete another admin")
 
+    # Remove all dependent rows first — their user_id columns are NOT NULL, so
+    # SQLAlchemy's default null-out on delete violates the constraint (500s).
+    from app.models import DailyUpdateReport, TrackerComment, FAQDocument
     db.query(ResponseHistory).filter(ResponseHistory.user_id == user_id).delete()
+    db.query(TicketLog).filter(TicketLog.user_id == user_id).delete()
+    db.query(DailyUpdateReport).filter(DailyUpdateReport.user_id == user_id).delete()
+    db.query(TrackerComment).filter(TrackerComment.user_id == user_id).delete()
+    # uploaded_by is nullable — keep the documents, just detach the uploader
+    db.query(FAQDocument).filter(FAQDocument.uploaded_by == user_id).update({"uploaded_by": None})
     db.delete(user)
     db.commit()
     return {"message": f"User {user.username} deleted"}
