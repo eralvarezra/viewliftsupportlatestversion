@@ -1,4 +1,5 @@
 import math
+import re
 import requests
 from fastapi import APIRouter, Depends, HTTPException
 from app.auth.routes import get_current_user
@@ -14,6 +15,45 @@ FRESHDESK_AUTH = (settings.FRESHDESK_API_KEY, "X")
 
 STATUS_MAP = {2: "Open", 3: "Pending", 4: "Resolved", 5: "Closed", 6: "Waiting on Customer", 7: "Waiting on Third Party"}
 PRIORITY_MAP = {1: "Low", 2: "Medium", 3: "High", 4: "Urgent"}
+
+
+# ── Payment/BEC phishing detection (Full Automated pool) ────────────────────
+# Modeled on real spam that slipped through (e.g. #344825: fake "SWIFT advice"
+# payment-confirmation mail with a Payment_Recelpt.pdf attachment). These are
+# scams aimed at the support inbox, never real subscriber requests.
+PHISHING_KW = [
+    "swift advice", "swift copy", "swift message", "mt103", "mt 103",
+    "payment has been successfully processed", "confirm once the funds",
+    "funds have been received", "remittance advice", "proof of payment",
+    "payment confirmation & records", "bank transfer details",
+    "kindly confirm receipt of payment", "wire confirmation",
+    "payment slip", "bank slip", "telegraphic transfer", "beneficiary account",
+]
+
+# Attachment names typical of payment-phishing lures. "rec[a-z]{0,3}pt" also
+# catches deliberate typos like "Recelpt".
+_PHISHY_ATTACHMENT_RE = re.compile(
+    r"(payment|swift|invoice|remittance|rec[a-z]{0,3}pt|statement)[\w_\-. ]*\.(pdf|html?|zip|iso|img)",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_phishing(subject: str, text: str, attachment_names: list, has_agent_reply: bool) -> bool:
+    """True if the ticket matches payment/BEC phishing patterns.
+
+    Two independent signals:
+    1. Finance-phishing phrases in subject/body (subscribers dispute charges;
+       they never announce that THEY processed a payment to us).
+    2. Fake reply: subject starts with "Re:" on a thread no agent ever answered,
+       combined with a payment-lure attachment name.
+    """
+    s = (subject or "").lower()
+    scan = s + " " + (text or "").lower()
+    if any(k in scan for k in PHISHING_KW):
+        return True
+    att = " ".join((a or "") for a in attachment_names)
+    fake_reply = s.startswith("re:") or s.startswith("[external] re:")
+    return fake_reply and not has_agent_reply and bool(_PHISHY_ATTACHMENT_RE.search(att))
 
 
 def _rate_limit_error(r) -> HTTPException:
@@ -744,12 +784,19 @@ def _scan_eligible_pool(max_age_hours: int = 5, force: bool = False):
         text = (t.get("subject", "") + " " + description + " " + last_msg).lower()
         refund = any(kw in text for kw in REFUND_KW)
         # Spam detection: trust Freshdesk's own type classification first, then a
-        # conservative marketing-subject keyword fallback.
+        # conservative marketing-subject keyword fallback, then payment-phishing
+        # patterns (fake SWIFT/payment-confirmation mails like #344825).
         ttype = (t.get("type") or "").lower()
         subj = (t.get("subject") or "").lower()
         spam_scan = subj + " " + description.lower() + " " + last_msg.lower()
+        att_names = [a.get("name") or "" for a in (data.get("attachments") or []) if isinstance(a, dict)]
+        has_agent_reply = any(
+            not c.get("incoming") and not c.get("private")
+            for c in (convs if isinstance(convs, list) else [])
+        )
         spam = ("spam" in ttype) or ("auto reply" in ttype) or ("auto-reply" in ttype) \
-            or any(k in spam_scan for k in SPAM_SUBJECT_KW)
+            or any(k in spam_scan for k in SPAM_SUBJECT_KW) \
+            or _looks_like_phishing(t.get("subject", ""), description + " " + last_msg, att_names, has_agent_reply)
 
         hrs = round((now - last_cust_dt).total_seconds() / 3600, 1)
         return {
