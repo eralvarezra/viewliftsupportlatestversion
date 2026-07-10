@@ -364,8 +364,9 @@ INSTRUCTIONS:
 - If the same problem affects multiple platforms, create a completely separate group for each platform
 - ONLY include groups with 3 or more tickets — ignore smaller groups completely
 - Spam tickets must be ignored entirely
+- IMPORTANT — refunds and cancellations are ROUTINE on these platforms: do NOT create a group or alert for "Refund Requests" or "Subscription Cancellation" just because several arrived. Only group them when multiple customers state the SAME concrete reason or failure (e.g. "no cancel option on Roku", "charged after cancelling", reaction to a price change, a specific error) — and in that case the title/description must name that concrete shared reason, not the generic category. Routine cancel/refund requests with no shared cause are baseline volume: mention them only inside the platform's deep_dive as normal volume, never as a trend.
 - For each group extract strictly from the data above:
-  * title: use standardized category names — choose the closest match from: "Login / Account Access Issues", "Billing / Payment Issues", "Refund Requests", "Subscription Cancellation", "Video Playback / Buffering", "Content / Streaming Access", "App Crashes / Technical Issues", "General App Inquiries". Only create a custom title if none of these fit
+  * title: use standardized category names — choose the closest match from: "Login / Account Access Issues", "Billing / Payment Issues", "Refund Requests", "Subscription Cancellation", "Video Playback / Buffering", "Content / Streaming Access", "App Crashes / Technical Issues", "General App Inquiries". Only create a custom title if none of these fit. EXCEPTION: refund/cancellation groups (allowed only with a concrete shared reason, per the rule below) must ALWAYS use a custom title naming that reason — e.g. "Cancellation option missing on Roku", "Charged after cancelling" — never the generic category name
   * description: 1-2 sentences describing the pattern
   * ticket_ids: list of Ticket ID numbers (integers) for tickets in this group — ALL must share the same Platform value
   * clients: list of unique client/contact names (from "Client=" field)
@@ -375,7 +376,7 @@ INSTRUCTIONS:
   * trend: volume indicator — "high" if 3 or more tickets, "medium" if exactly 2, "low" if 1
 
 ANALYSIS SECTIONS (this is what leadership reads — never leave them shallow):
-- "emerging": clusters of only 1-2 tickets that hint at a possible NEW issue worth watching (same fields as groups). Only real signals — do not force one if nothing stands out. On low-volume days these matter most.
+- "emerging": clusters of only 1-2 tickets that hint at a possible NEW issue worth watching (same fields as groups). Only real signals — do not force one if nothing stands out. On low-volume days these matter most. The refund/cancellation rule applies here too: a lone routine cancel/refund request is never an emerging signal; one with a concrete stated failure or reason is.
 - "deep_dives": one entry per Platform that has ANY tickets today:
   * platform: the Platform value
   * assessment: 3-5 sentences of real analysis — what is happening on this platform today, the most likely root cause(s), and whether it is new, recurring, or escalating compared with the RECENT DAILY REPORTS above. If the pattern suggests something larger is going on (product bug, billing flow problem, store/platform change), say so explicitly. If today is quiet, analyze WHY it might be quiet and what the recent-days pattern shows.
