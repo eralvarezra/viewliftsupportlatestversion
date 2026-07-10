@@ -824,7 +824,8 @@ export default function Generate() {
         return
       }
       if (!ticket) {
-        // Nothing available right now — watch and pick up automatically.
+        // Nothing available right now (or the Freshdesk API window is
+        // exhausted) — watch and pick up automatically when possible.
         setAutoStage('watching')
         return
       }
@@ -885,9 +886,12 @@ export default function Generate() {
     }
   }, [autoActive])
 
-  // Watcher: while idle-watching, auto-claim as soon as a ticket appears in the pool
+  // Watcher: while idle-watching, auto-claim as soon as a ticket appears in the
+  // pool — but never while the Freshdesk API window is exhausted (the bot
+  // pauses and resumes by itself when rate_limited_seconds reaches 0).
   useEffect(() => {
     if (autoActive && autoStage === 'watching' && !autoBusyRef.current
+        && (autoStatus?.rate_limited_seconds || 0) === 0
         && (autoStatus?.pool_remaining || 0) > 0) {
       claimAndProcess()
     }
@@ -1068,8 +1072,15 @@ export default function Generate() {
                       {autoStage === 'loading' && '⏳ Claiming & loading next ticket…'}
                       {autoStage === 'generating' && '🤖 Generating response…'}
                       {autoStage === 'review' && autoCurrent && `👀 Working #${autoCurrent.id} (${autoCurrent.platform}) — review & Send Reply to continue.`}
-                      {autoStage === 'watching' && '🔭 Monitoring — waiting for new tickets. Will claim automatically when one arrives.'}
+                      {autoStage === 'watching' && ((autoStatus?.rate_limited_seconds || 0) > 0
+                        ? `⏸️ Paused — Freshdesk API limit reached. Auto-resuming in ~${Math.ceil(autoStatus.rate_limited_seconds / 60)} min.`
+                        : '🔭 Monitoring — waiting for new tickets. Will claim automatically when one arrives.')}
                     </p>
+                    {(autoStatus?.rate_limited_seconds || 0) > 0 && autoStage !== 'watching' && (
+                      <p className="text-[11px] text-amber-600 dark:text-amber-400">
+                        ⚠️ Freshdesk API limit reached — new claims paused for ~{Math.ceil(autoStatus.rate_limited_seconds / 60)} min.
+                      </p>
+                    )}
 
                     {/* Live shared-pool panel */}
                     {autoStatus && (

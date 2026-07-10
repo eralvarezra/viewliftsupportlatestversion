@@ -13,6 +13,26 @@ router = APIRouter()
 FRESHDESK_BASE = f"https://{settings.FRESHDESK_DOMAIN}/api/v2"
 FRESHDESK_AUTH = (settings.FRESHDESK_API_KEY, "X")
 
+# ── Global Freshdesk rate-limit brake ────────────────────────────────────────
+# When Freshdesk returns 429 anywhere, we record until when the API is
+# exhausted. While active, the Full Automated bot pauses completely (no scans,
+# no claims) and auto-resumes once the window passes.
+_FD_RATE_LIMIT = {"until": 0.0}  # epoch seconds
+
+
+def _note_rate_limit(seconds) -> None:
+    import time
+    try:
+        seconds = int(seconds)
+    except (TypeError, ValueError):
+        seconds = 60
+    _FD_RATE_LIMIT["until"] = max(_FD_RATE_LIMIT["until"], time.time() + max(seconds, 30))
+
+
+def _rate_limit_remaining() -> int:
+    import time
+    return max(0, int(_FD_RATE_LIMIT["until"] - time.time()))
+
 STATUS_MAP = {2: "Open", 3: "Pending", 4: "Resolved", 5: "Closed", 6: "Waiting on Customer", 7: "Waiting on Third Party"}
 PRIORITY_MAP = {1: "Low", 2: "Medium", 3: "High", 4: "Urgent"}
 
@@ -58,6 +78,7 @@ def _looks_like_phishing(subject: str, text: str, attachment_names: list, has_ag
 
 def _rate_limit_error(r) -> HTTPException:
     retry_after = r.headers.get("Retry-After")
+    _note_rate_limit(retry_after or 60)
     if retry_after:
         try:
             seconds = int(retry_after)
@@ -657,6 +678,10 @@ def _scan_eligible_pool(max_age_hours: int = 5, force: bool = False):
     _nowts = _time.time()
     if not force and _POOL_CACHE["data"] is not None and (_nowts - _POOL_CACHE["ts"]) < 60:
         return _POOL_CACHE["data"]
+    # API exhausted: don't spend a single call — serve the stale cache (or
+    # nothing) until the window resets.
+    if _rate_limit_remaining() > 0:
+        return _POOL_CACHE["data"] or []
     from datetime import datetime, timezone, timedelta
     from concurrent.futures import ThreadPoolExecutor
     import re
@@ -714,9 +739,9 @@ def _scan_eligible_pool(max_age_hours: int = 5, force: bool = False):
                 params={"query": f'"{query}"', "page": page}, timeout=15,
             )
             if r.status_code == 429:
-                import time as _t
-                _t.sleep(min(int(r.headers.get("Retry-After", "5")), 20))
-                continue
+                # Record the exhaustion and abort — retrying burns the window.
+                _note_rate_limit(r.headers.get("Retry-After") or 60)
+                return []
             if r.status_code == 200:
                 return r.json().get("results", [])
             break
@@ -747,6 +772,8 @@ def _scan_eligible_pool(max_age_hours: int = 5, force: bool = False):
                 f"{FRESHDESK_BASE}/tickets/{tid}?include=conversations,requester",
                 auth=FRESHDESK_AUTH, timeout=10,
             )
+            if cr.status_code == 429:
+                _note_rate_limit(cr.headers.get("Retry-After") or 60)
             data = cr.json() if cr.status_code == 200 else {}
         except Exception:
             data = {}
@@ -866,6 +893,12 @@ def automated_claim_next(
     from datetime import datetime, timedelta
     from sqlalchemy import text as _sql
 
+    # API exhausted → the bot pauses: no scans, no claims. The frontend shows
+    # the pause and retries automatically once the window resets.
+    rl = _rate_limit_remaining()
+    if rl > 0:
+        return {"ticket": None, "rate_limited": True, "retry_after_seconds": rl}
+
     now = datetime.utcnow()
     expires = now + timedelta(minutes=CLAIM_TTL_MIN)
 
@@ -887,6 +920,8 @@ def automated_claim_next(
         resumed_ok = True
         try:
             vr = requests.get(f"{FRESHDESK_BASE}/tickets/{own[0]}", auth=FRESHDESK_AUTH, timeout=8)
+            if vr.status_code == 429:
+                _note_rate_limit(vr.headers.get("Retry-After") or 60)
             if vr.status_code == 200 and (vr.json().get("spam") or vr.json().get("deleted")):
                 db.execute(_sql("UPDATE automated_claims SET status='skipped' WHERE ticket_id=:tid"),
                            {"tid": own[0]})
@@ -964,6 +999,8 @@ def automated_claim_next(
             # served after being marked spam). One cheap GET closes the race.
             try:
                 vr = requests.get(f"{FRESHDESK_BASE}/tickets/{t['id']}", auth=FRESHDESK_AUTH, timeout=8)
+                if vr.status_code == 429:
+                    _note_rate_limit(vr.headers.get("Retry-After") or 60)
                 if vr.status_code == 200 and (vr.json().get("spam") or vr.json().get("deleted")):
                     db.execute(_sql("UPDATE automated_claims SET status='skipped' WHERE ticket_id=:tid"),
                                {"tid": t["id"]})
@@ -1100,4 +1137,5 @@ def automated_status(
         "flagged": flagged,
         "sent_count": sent_count,
         "my_id": current_user.id,
+        "rate_limited_seconds": _rate_limit_remaining(),
     }
