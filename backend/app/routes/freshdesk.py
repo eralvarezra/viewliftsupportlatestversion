@@ -24,7 +24,7 @@ PRIORITY_MAP = {1: "Low", 2: "Medium", 3: "High", 4: "Urgent"}
 PHISHING_KW = [
     "swift advice", "swift copy", "swift message", "mt103", "mt 103",
     "payment has been successfully processed", "confirm once the funds",
-    "funds have been received", "remittance advice", "proof of payment",
+    "funds have been received", "remittance advice",
     "payment confirmation & records", "bank transfer details",
     "kindly confirm receipt of payment", "wire confirmation",
     "payment slip", "bank slip", "telegraphic transfer", "beneficiary account",
@@ -684,7 +684,11 @@ def _scan_eligible_pool(max_age_hours: int = 5, force: bool = False):
     # already classify the ticket type as spam/auto-reply).
     SPAM_SUBJECT_KW = [
         "sponsorship", "newsletter", "webinar", "press release",
-        "partnership opportunity", "advertis", "guest post", "backlink",
+        # "advertis" alone false-positived on customers saying "advertised"
+        # (ticket #340604) — only solicitation phrasings count.
+        "partnership opportunity", "advertising opportunity", "advertise with us",
+        "advertise on your", "advertising services", "ad placement",
+        "guest post", "backlink",
         "ceo update", "quarterly update", "promo code", "limited time offer",
         "act now", "exclusive offer", "boost your", "grow your", "seo audit",
         "link building", "collaboration opportunity", "invoice attached",
@@ -794,9 +798,16 @@ def _scan_eligible_pool(max_age_hours: int = 5, force: bool = False):
             not c.get("incoming") and not c.get("private")
             for c in (convs if isinstance(convs, list) else [])
         )
-        spam = ("spam" in ttype) or ("auto reply" in ttype) or ("auto-reply" in ttype) \
-            or any(k in spam_scan for k in SPAM_SUBJECT_KW) \
+        # Keyword/phishing heuristics only apply to first-contact tickets: a
+        # thread where an agent already replied is a real conversation (#340604
+        # was falsely flagged while 8 messages deep). Freshdesk's own
+        # type-based classification is always trusted.
+        heuristic_spam = (
+            any(k in spam_scan for k in SPAM_SUBJECT_KW)
             or _looks_like_phishing(t.get("subject", ""), description + " " + last_msg, att_names, has_agent_reply)
+        )
+        spam = ("spam" in ttype) or ("auto reply" in ttype) or ("auto-reply" in ttype) \
+            or (heuristic_spam and not has_agent_reply)
 
         hrs = round((now - last_cust_dt).total_seconds() / 3600, 1)
         return {
