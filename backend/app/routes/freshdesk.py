@@ -910,13 +910,36 @@ def automated_claim_next(
 
     pool = _servable(_scan_eligible_pool(5))
 
-    # Tickets that must not be served: actively worked, already sent, or skipped.
-    blocked = set(r[0] for r in db.execute(_sql(
-        "SELECT ticket_id FROM automated_claims WHERE status IN ('working','sent','skipped')"
-    )).fetchall())
+    # Tickets that must not be served: actively worked, skipped, or already sent
+    # WITHOUT a newer customer reply. A ticket answered via Full Automated where
+    # the customer replied again is workable again (#344774 stayed blocked).
+    claim_rows = db.execute(_sql(
+        "SELECT ticket_id, status, claimed_at FROM automated_claims "
+        "WHERE status IN ('working','sent','skipped')"
+    )).fetchall()
+    blocked_claims = {r[0]: (r[1], r[2]) for r in claim_rows}
+
+    def _is_blocked(t):
+        entry = blocked_claims.get(t["id"])
+        if not entry:
+            return False
+        status_, claimed_at_ = entry
+        if status_ in ("working", "skipped"):
+            return True
+        # status 'sent': blocked only if the customer has NOT replied since.
+        try:
+            sent_at = claimed_at_ if isinstance(claimed_at_, datetime) \
+                else datetime.fromisoformat(str(claimed_at_))
+            from datetime import timezone as _tz
+            last_cust = datetime.fromisoformat(
+                t["last_customer_at"].replace("Z", "+00:00")
+            ).astimezone(_tz.utc).replace(tzinfo=None)
+            return last_cust <= sent_at
+        except Exception:
+            return True  # can't compare — stay safe, keep blocked
 
     for t in pool:
-        if t["id"] in blocked:
+        if _is_blocked(t):
             continue
         row = db.execute(_sql('''
             INSERT INTO automated_claims
@@ -925,7 +948,7 @@ def automated_claim_next(
             ON CONFLICT (ticket_id) DO UPDATE
                 SET claimed_by=:uid, claimed_by_name=:uname, status='working',
                     claimed_at=:now, expires_at=:exp, subject=:subj, platform=:plat, url=:url
-                WHERE automated_claims.status NOT IN ('working','sent')
+                WHERE automated_claims.status NOT IN ('working')
                    OR automated_claims.expires_at < :now
             RETURNING claimed_by
         '''), {
