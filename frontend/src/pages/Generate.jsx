@@ -41,6 +41,27 @@ function isBlockedRecipientDomain(email) {
   const domain = (email.split('@')[1] || '').toLowerCase()
   return SUPPORT_DOMAINS.includes(domain)
 }
+// Domains owned by the platforms/company — a customer never has an address here.
+// Any thread email at these domains is internal (support inboxes, staff, no-reply).
+const PLATFORM_DOMAINS = [
+  'livgolf.com', 'livgolfplus.com', 'spacecityhn.com', 'monumentalsports.com',
+  'monumentalsportsnetwork.com', 'viewlift.com', 'dirtvision.com',
+  'altitudeplus.com', 'altitude.tv', 'foxone.com', 'fox.com', 'freshdesk.com',
+]
+const INTERNAL_LOCAL_TOKENS = [
+  'support', 'appsupport', 'dvsupport', 'techsupport', 'getsupport', 'contactus',
+  'contact', 'noreply', 'no-reply', 'admin', 'info', 'help', 'helpdesk', 'billing',
+  'donotreply', 'do-not-reply', 'notifications', 'mailer', 'bounce', 'service',
+  'customerservice', 'customercare', 'customersupport', 'team', 'care', 'feedback',
+]
+// Token-based match: "sc-contactus@spacecityhn.com" → tokens ["sc","contactus"]
+// → internal. Token boundaries keep customer names safe (e.g. "phelps" ≠ "help").
+function isInternalThreadEmail(email) {
+  const [localPart, domain = ''] = email.toLowerCase().split('@')
+  if (PLATFORM_DOMAINS.includes(domain)) return true
+  const tokens = localPart.split(/[._\-+]/)
+  return INTERNAL_LOCAL_TOKENS.some(p => tokens.some(tk => tk === p || tk.startsWith(p)))
+}
 function isSupportEmail(email) {
   if (!email) return false
   const domain = (email.split('@')[1] || '').toLowerCase()
@@ -459,20 +480,17 @@ export default function Generate() {
             setCmsInfo(cr.data)
             if (!cr.data.found || (cr.data.found && !cr.data.is_subscribed)) {
               const thread = r.data.full_thread || r.data.description || ''
-              const _internalPrefixes = ['support', 'appsupport', 'dvsupport', 'noreply', 'no-reply', 'admin', 'info', 'help', 'billing', 'donotreply', 'do-not-reply', 'notifications', 'mailer', 'bounce']
               const requesterLocal = requesterEmail.split('@')[0]
               const found = [...new Set(
                 (thread.match(/[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g) || [])
                   .map(e => e.toLowerCase())
                   .filter(e => {
                     if (e === requesterEmail) return false
+                    if (isInternalThreadEmail(e)) return false
                     const localPart = e.split('@')[0]
-                    const domain = e.split('@')[1] || ''
-                    // Never treat a support-alias domain (e.g. livgolf.com) as the customer
-                    if (SUPPORT_DOMAINS.includes(domain)) return false
                     // Filter HTML artifact: word concatenated directly before a known email (e.g. "addressjudy...")
                     if (localPart !== requesterLocal && localPart.endsWith(requesterLocal)) return false
-                    return !_internalPrefixes.some(p => localPart === p || localPart.endsWith(p) || localPart.startsWith(p))
+                    return true
                   })
               )]
 
@@ -498,9 +516,10 @@ export default function Generate() {
                     const tld = m.split('.').pop()
                     if (_fakeTlds.has(tld)) return false
                     if (m === requesterEmail || found.includes(m)) return false
+                    if (isInternalThreadEmail(m)) return false
                     const localPart = m.split('@')[0]
                     if (localPart !== requesterLocal && localPart.endsWith(requesterLocal)) return false
-                    return !_internalPrefixes.some(p => localPart === p || localPart.endsWith(p) || localPart.startsWith(p))
+                    return true
                   })
               )]
 
@@ -530,17 +549,10 @@ export default function Generate() {
         // still surface the real customer email from the thread for the contact change.
         const thread = r.data.full_thread || r.data.description || ''
         const requesterEmail = r.data.requester_email.toLowerCase()
-        const _internalPrefixes = ['support', 'appsupport', 'dvsupport', 'noreply', 'no-reply', 'admin', 'info', 'help', 'billing', 'donotreply', 'do-not-reply', 'notifications', 'mailer', 'bounce']
         finalAlts = [...new Set(
           (thread.match(/[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g) || [])
             .map(e => e.toLowerCase())
-            .filter(e => {
-              if (e === requesterEmail) return false
-              const localPart = e.split('@')[0]
-              const domain = e.split('@')[1] || ''
-              if (SUPPORT_DOMAINS.includes(domain)) return false
-              return !_internalPrefixes.some(p => localPart === p || localPart.endsWith(p) || localPart.startsWith(p))
-            })
+            .filter(e => e !== requesterEmail && !isInternalThreadEmail(e))
         )]
         setCmsAltEmails(finalAlts)
       }
