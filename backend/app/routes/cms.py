@@ -135,11 +135,14 @@ def _login_step1(db: Session, user_id: Optional[int] = None, site: str = "schn")
 
     username, password = creds
     try:
+        # x-api-key scopes the login to THIS site — without it the CMS issues a
+        # token for the account's default site (monumental tokens were coming
+        # back scoped to 'chsn', breaking all Monumental lookups with 401s).
         r = http_requests.post(CMS_LOGIN_URL, json={
             "username": username,
             "password": password,
             "deviceId": DEVICE_ID,
-        }, timeout=TIMEOUT)
+        }, headers={"x-api-key": _cfg(site)["xapikey"]}, timeout=TIMEOUT)
         data = r.json()
         if not data.get("success"):
             return {"ok": False, "message": data.get("message", "Login failed — check your CMS credentials")}
@@ -187,7 +190,7 @@ def _login_step2_otp(otp: str, db: Session, user_id: Optional[int] = None, site:
             "otp": otp.strip(),
             "isLogin": True,
             "deviceId": session["device_id"],
-        }, timeout=TIMEOUT)
+        }, headers={"x-api-key": _cfg(site)["xapikey"]}, timeout=TIMEOUT)
         data = r.json()
         if not data.get("success"):
             return {"ok": False, "message": data.get("message", "OTP verification failed")}
