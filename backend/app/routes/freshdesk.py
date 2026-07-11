@@ -943,18 +943,26 @@ def automated_claim_next(
         except Exception:
             pass
         if resumed_ok:
-            db.execute(_sql("UPDATE automated_claims SET expires_at = :exp WHERE ticket_id = :tid"),
-                       {"exp": expires, "tid": own[0]})
-            db.commit()
             t = next((x for x in _scan_eligible_pool(5) if x["id"] == own[0]), None)
-            if t is None:
-                t = {
-                    "id": own[0],
-                    "subject": own[1] or "",
-                    "platform": own[2] or "",
-                    "url": own[3] or f"https://{settings.FRESHDESK_DOMAIN}/a/tickets/{own[0]}",
-                }
-            return {"ticket": {**t, "resumed": True}}
+            if t and (t.get("spam_flag") or t.get("refund_flag")):
+                # Our own heuristics flagged it after it was claimed (#345005 was
+                # resumed while sitting in the manual-review list) — never resume
+                # a flagged ticket; release it to manual review.
+                db.execute(_sql("UPDATE automated_claims SET status='skipped' WHERE ticket_id = :tid"),
+                           {"tid": own[0]})
+                db.commit()
+            else:
+                db.execute(_sql("UPDATE automated_claims SET expires_at = :exp WHERE ticket_id = :tid"),
+                           {"exp": expires, "tid": own[0]})
+                db.commit()
+                if t is None:
+                    t = {
+                        "id": own[0],
+                        "subject": own[1] or "",
+                        "platform": own[2] or "",
+                        "url": own[3] or f"https://{settings.FRESHDESK_DOMAIN}/a/tickets/{own[0]}",
+                    }
+                return {"ticket": {**t, "resumed": True}}
 
     pool = _servable(_scan_eligible_pool(5))
 
