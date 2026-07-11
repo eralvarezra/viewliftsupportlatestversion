@@ -405,6 +405,22 @@ export default function Generate() {
     })
   }
 
+  // Any 429 anywhere carries Freshdesk's real Retry-After — override the
+  // widget's local 1-hour estimate so both countdowns always match.
+  useEffect(() => {
+    const onRateLimited = (e) => {
+      const seconds = e.detail?.seconds
+      if (!seconds) return
+      setFdRateLimit(prev => {
+        const next = { ...(prev || { remaining: 0, total: 5000 }), resetAt: Date.now() + seconds * 1000 }
+        localStorage.setItem('fd_rate_limit', JSON.stringify(next))
+        return next
+      })
+    }
+    window.addEventListener('fd-rate-limited', onRateLimited)
+    return () => window.removeEventListener('fd-rate-limited', onRateLimited)
+  }, [])
+
   useEffect(() => {
     if (rlTimerRef.current) clearInterval(rlTimerRef.current)
     if (!fdRateLimit?.resetAt) { setRlCountdown(null); return }

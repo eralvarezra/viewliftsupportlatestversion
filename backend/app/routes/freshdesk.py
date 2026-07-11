@@ -79,6 +79,7 @@ def _looks_like_phishing(subject: str, text: str, attachment_names: list, has_ag
 def _rate_limit_error(r) -> HTTPException:
     retry_after = r.headers.get("Retry-After")
     _note_rate_limit(retry_after or 60)
+    seconds = None
     if retry_after:
         try:
             seconds = int(retry_after)
@@ -88,7 +89,10 @@ def _rate_limit_error(r) -> HTTPException:
             msg = f"Freshdesk rate limit reached. Try again after {retry_after}."
     else:
         msg = "Freshdesk rate limit reached, try again later."
-    return HTTPException(status_code=429, detail=msg)
+    # Expose the authoritative wait so the frontend rate-limit widget can sync
+    # its countdown to Freshdesk's real window instead of a local estimate.
+    return HTTPException(status_code=429, detail=msg,
+                         headers={"Retry-After": str(seconds or _rate_limit_remaining() or 300)})
 
 
 def _build_full_thread(ticket: dict, conversations: list) -> str:

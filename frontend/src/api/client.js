@@ -35,6 +35,11 @@ client.interceptors.request.use(
 client.interceptors.response.use(
   (response) => response,
   (error) => {
+    if (error.response?.status === 429) {
+      // Sync UI countdowns to Freshdesk's authoritative Retry-After window
+      const ra = parseInt(error.response.headers?.['retry-after'], 10)
+      if (ra > 0) window.dispatchEvent(new CustomEvent('fd-rate-limited', { detail: { seconds: ra } }))
+    }
     if (error.response?.status === 401) {
       // Clear token and redirect to login
       localStorage.removeItem('token')
