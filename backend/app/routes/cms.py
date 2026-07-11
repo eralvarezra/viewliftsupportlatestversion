@@ -29,7 +29,8 @@ ALTITUD_SITE      = "altitude"
 DIRTVISION_XAPIKEY = "FGtQFMG1Fd7DpPUfzoQ5U8FIQo51xT8d9tkbECKE"
 DIRTVISION_SITE   = "dirtvision"
 MSN_XAPIKEY       = "eDDgMPynXA8W2YeB5b0qe9KtnsuKP96W8aBWQCEF"
-MSN_SITE          = "monumentalsportsnetwork"
+MSN_SITE          = "monumental-network"  # site id per the real CMS session (was "monumentalsportsnetwork")
+MSN_API_BASE      = "https://cms-api.monumentalsportsnetwork.com"  # Monumental runs its own CMS API host
 CMS_GRAPHQL     = "https://cms.api.viewlift.com/management/graphql"
 CMS_INVOKE      = "https://cms.api.viewlift.com/v3.0/invoke"
 CMS_LOGIN_URL   = "https://cms.api.viewlift.com/v3.0/user/auth/login"
@@ -39,15 +40,22 @@ TOKEN_KEY       = "cms_schn_token"
 DEVICE_ID       = "browser-427558fc-49f6-44fb-9bfc-96fedb7e5a97"
 TIMEOUT         = 10
 
+DEFAULT_API_BASE = "https://cms.api.viewlift.com"
+
 _CMS_CONFIGS = {
     "schn":       {"xapikey": SCHN_XAPIKEY,       "site": SCHN_SITE,       "client_id": SCHN_CLIENT_ID},
     "altitude":   {"xapikey": ALTITUD_XAPIKEY,    "site": ALTITUD_SITE,    "client_id": None},
     "dirtvision": {"xapikey": DIRTVISION_XAPIKEY, "site": DIRTVISION_SITE, "client_id": None},
-    "monumental":  {"xapikey": MSN_XAPIKEY,        "site": MSN_SITE,        "client_id": None},
+    "monumental":  {"xapikey": MSN_XAPIKEY,        "site": MSN_SITE,        "client_id": None, "api_base": MSN_API_BASE},
 }
 
 def _cfg(site: str) -> dict:
     return _CMS_CONFIGS.get(site, _CMS_CONFIGS["schn"])
+
+
+def _api(site: str, path: str) -> str:
+    """Per-site CMS API URL — Monumental runs on its own host, the rest on the shared one."""
+    return (_cfg(site).get("api_base") or DEFAULT_API_BASE) + path
 
 
 class CMSTokenRequest(BaseModel):
@@ -138,7 +146,7 @@ def _login_step1(db: Session, user_id: Optional[int] = None, site: str = "schn")
         # x-api-key scopes the login to THIS site — without it the CMS issues a
         # token for the account's default site (monumental tokens were coming
         # back scoped to 'chsn', breaking all Monumental lookups with 401s).
-        r = http_requests.post(CMS_LOGIN_URL, json={
+        r = http_requests.post(_api(site, "/v3.0/user/auth/login"), json={
             "username": username,
             "password": password,
             "deviceId": DEVICE_ID,
@@ -185,7 +193,7 @@ def _login_step2_otp(otp: str, db: Session, user_id: Optional[int] = None, site:
         return {"ok": False, "message": "No OTP session found — start refresh first"}
     try:
         session = json.loads(row.value)
-        r = http_requests.post(CMS_OTP_VERIFY, json={
+        r = http_requests.post(_api(site, "/v3.0/user/auth/otp/verify"), json={
             "username": session["session_username"],
             "otp": otp.strip(),
             "isLogin": True,
@@ -363,7 +371,7 @@ def test_token(
         return {"ok": False, "message": "No valid token stored"}
     cfg = _cfg(site)
     try:
-        r = http_requests.post(CMS_GRAPHQL, json={
+        r = http_requests.post(_api(site, "/management/graphql"), json={
             "operationName": "UserList",
             "query": "query UserList($req: UserListRequest) { userList(req: $req) { users { id username } } }",
             "variables": {"req": {"site": cfg["site"], "keyword": "test@test.com", "limit": 1}},
@@ -488,7 +496,7 @@ def fetch_cms_data(email: str, db: Session, include_qos: bool = True, user_id: O
         if not email:
             return None
         try:
-            r = http_requests.post(CMS_INVOKE, json={
+            r = http_requests.post(_api(site, "/v3.0/invoke"), json={
                 "url": "/v2/admin/identity/user-search", "method": "POST", "role": "Customer Support",
                 "auth": {"site": site_slug, "isServerToken": True},
                 "query": {"site": site_slug, "totalCount": True},
@@ -503,21 +511,21 @@ def fetch_cms_data(email: str, db: Session, include_qos: bool = True, user_id: O
             return None
 
     def _identity():
-        return http_requests.post(CMS_INVOKE, json={
+        return http_requests.post(_api(site, "/v3.0/invoke"), json={
             "url": "identity/user", "method": "GET", "role": "Customer Support",
             "auth": {"site": site_slug, "userId": user_id}, "body": {},
             "query": {"site": site_slug, "userId": user_id},
         }, headers=cms_headers, timeout=TIMEOUT).json()
 
     def _devices():
-        return http_requests.post(CMS_INVOKE, json={
+        return http_requests.post(_api(site, "/v3.0/invoke"), json={
             "url": "v2/user/device", "method": "GET", "role": "Customer Support",
             "auth": {"site": site_slug, "userId": user_id}, "body": {},
             "query": {"site": site_slug, "userId": user_id, "limit": 100},
         }, headers=cms_headers, timeout=TIMEOUT).json()
 
     def _billing():
-        r = http_requests.post(CMS_INVOKE, json={
+        r = http_requests.post(_api(site, "/v3.0/invoke"), json={
             "url": "/v3/billing/history", "method": "GET", "role": "Customer Support",
             "auth": {"site": site_slug, "userId": user_id}, "body": {},
             "query": {"site": site_slug, "limit": 50, "offset": 0, "purchaseType": "SUBSCRIPTION"},
