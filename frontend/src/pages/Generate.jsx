@@ -908,7 +908,15 @@ export default function Generate() {
       return
     }
     const poll = async () => {
-      try { const r = await client.get('/freshdesk/automated/status'); setAutoStatus(r.data) } catch (_) {}
+      try {
+        const r = await client.get('/freshdesk/automated/status')
+        setAutoStatus(r.data)
+        // The backend brake absorbs Freshdesk 429s (no error reaches the
+        // browser), so sync the rate-limit widget from its countdown too.
+        if ((r.data?.rate_limited_seconds || 0) > 0) {
+          window.dispatchEvent(new CustomEvent('fd-rate-limited', { detail: { seconds: r.data.rate_limited_seconds } }))
+        }
+      } catch (_) {}
     }
     poll()
     autoPollRef.current = setInterval(poll, 4000)
