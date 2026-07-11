@@ -179,8 +179,19 @@ def _build_agent_notes(agent_notes: str, cms_account: dict) -> str:
     if cms_account and cms_account.get("found"):
         is_subscribed = cms_account.get("is_subscribed", False)
         _sub_status = (cms_account.get("subscription_status") or "").upper()
+        _handler = (cms_account.get("payment_handler") or "").upper()
+        _plan_l = ((cms_account.get("plan") or "") + " " + (cms_account.get("plan_name") or "")).lower()
+        _is_tve = _handler == "TVE" or _plan_l.strip().startswith("tve") or "tve-" in _plan_l
         if is_subscribed:
             sub_status_line = "SUBSCRIBER STATUS: ACTIVE — has a valid active subscription. Do NOT suggest resubscribing or imply the subscription expired. Do NOT reveal specific plan details (price, renewal date, plan name, auto-renew status) to the customer — only confirm the account is active and address their actual issue."
+        elif _is_tve:
+            sub_status_line = (
+                "SUBSCRIBER STATUS: TVE (TV Everywhere) — this customer accesses through their "
+                "TV provider (cable/satellite login), so there is NO direct billing subscription "
+                "in our system, but they ARE a valid subscriber. Do NOT say they have no "
+                "subscription and do NOT suggest subscribing or paying. Their access/auth issues "
+                "usually involve the TV-provider login flow — troubleshoot their actual issue."
+            )
         elif "SUSPEND" in _sub_status:
             sub_status_line = (
                 "SUBSCRIBER STATUS: SUSPENDED — the account EXISTS and has a subscription, but it is "
@@ -468,12 +479,17 @@ async def generate(
     # (usually a failed payment) IS the customer's problem — let the full flow
     # handle it with the SUSPENDED context instead of the canned template.
     _cms_suspended = "SUSPEND" in (((request.cms_account or {}).get("subscription_status")) or "").upper()
+    # TVE (TV Everywhere) subscribers access via their TV provider — no direct
+    # billing sub in CMS, but they ARE subscribed. Never send "No Subscription".
+    _cms_acct = request.cms_account or {}
+    _cms_tve = ((_cms_acct.get("payment_handler") or "").upper() == "TVE"
+                or ((_cms_acct.get("plan") or "").lower().strip().startswith("tve")))
     # "B2C No Subscription" is a FIRST-CONTACT template only: in an ongoing
     # thread the missing subscription is usually known/expected context (e.g. a
     # refund we processed, a season-ticket comp account being set up — #344960),
     # so the full flow must answer the actual question instead.
     _is_first_contact = "[Agent Reply]" not in request.message and "[Customer Reply]" not in request.message
-    if request.cms_no_subscription and _is_first_contact and not _cms_suspended and parsed_data.ticket_type == "billing" and not _no_sub_already_sent and not _early_has_agent_notes:
+    if request.cms_no_subscription and _is_first_contact and not _cms_suspended and not _cms_tve and parsed_data.ticket_type == "billing" and not _no_sub_already_sent and not _early_has_agent_notes:
         no_sub = db.query(CannedResponse).filter(
             CannedResponse.title == "B2C No Subscription"
         ).first()

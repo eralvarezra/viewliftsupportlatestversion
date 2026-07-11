@@ -62,6 +62,14 @@ function isInternalThreadEmail(email) {
   const tokens = localPart.split(/[._\-+]/)
   return INTERNAL_LOCAL_TOKENS.some(p => tokens.some(tk => tk === p || tk.startsWith(p)))
 }
+// TVE (TV Everywhere): access through a TV provider — no direct billing sub,
+// but a valid subscriber nonetheless.
+function isTveAccount(cms) {
+  if (!cms) return false
+  const handler = (cms.payment_handler || '').toUpperCase()
+  const plan = (cms.plan || '').toLowerCase().trim()
+  return handler === 'TVE' || plan.startsWith('tve')
+}
 function isSupportEmail(email) {
   if (!email) return false
   const domain = (email.split('@')[1] || '').toLowerCase()
@@ -1206,9 +1214,11 @@ export default function Generate() {
                             CMS: {cmsInfo.name || cmsInfo.email}
                             {cmsInfo.is_subscribed
                               ? <span className="ml-2 px-1.5 py-0.5 rounded bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-400">Active subscriber</span>
-                              : (cmsInfo.subscription_status || '').toUpperCase().includes('SUSPEND')
-                                ? <span className="ml-2 px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-400">Suspended</span>
-                                : <span className="ml-2 px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400">Not subscribed</span>
+                              : isTveAccount(cmsInfo)
+                                ? <span className="ml-2 px-1.5 py-0.5 rounded bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-400" title="TV Everywhere — subscribed through their TV provider">TVE · via TV provider</span>
+                                : (cmsInfo.subscription_status || '').toUpperCase().includes('SUSPEND')
+                                  ? <span className="ml-2 px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-400">Suspended</span>
+                                  : <span className="ml-2 px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400">Not subscribed</span>
                             }
                           </p>
                           <a
@@ -1472,6 +1482,7 @@ end_of_access: 2026-05-18`}
           {(() => {
             if (!cmsInfo?.found || cmsInfo?.is_subscribed || !fdTicket?.id) return null
             if ((cmsInfo?.subscription_status || '').toUpperCase().includes('SUSPEND')) return null
+            if (isTveAccount(cmsInfo)) return null
             const msgLower = customerMessage.toLowerCase()
             const noSubMatch = msgLower.match(/unable to locate an active subscription associated with the email address\s+([\w._%+\-]+@[\w.\-]+\.[a-z]{2,})/i)
             const noSubSentEmail = noSubMatch ? noSubMatch[1].toLowerCase() : null
