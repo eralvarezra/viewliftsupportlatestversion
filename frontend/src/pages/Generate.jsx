@@ -412,7 +412,9 @@ export default function Generate() {
       const seconds = e.detail?.seconds
       if (!seconds) return
       setFdRateLimit(prev => {
-        const next = { ...(prev || { remaining: 0, total: 5000 }), resetAt: Date.now() + seconds * 1000 }
+        // Rate-limited means zero calls available NOW — the stale "remaining"
+        // from before the block would contradict the paused state.
+        const next = { ...(prev || { total: 5000 }), remaining: 0, resetAt: Date.now() + seconds * 1000 }
         localStorage.setItem('fd_rate_limit', JSON.stringify(next))
         return next
       })
