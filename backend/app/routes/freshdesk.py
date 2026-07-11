@@ -726,6 +726,9 @@ def _scan_eligible_pool(max_age_hours: int = 5, force: bool = False):
         "digital marketing", "seo services", "mobile app development",
         "design and development company", "increase your sales",
         "rank your website", "lead generation service",
+        # euphemistic cold-outreach phrasings that avoid saying "SEO" (#345005)
+        "strengthen their visibility", "we're helping businesses",
+        "brief introduction with more information", "visibility where customers search",
     ]
 
     now = datetime.now(timezone.utc)
@@ -821,6 +824,15 @@ def _scan_eligible_pool(max_age_hours: int = 5, force: bool = False):
         subj = (t.get("subject") or "").lower()
         spam_scan = subj + " " + description.lower() + " " + last_msg.lower()
         att_names = [a.get("name") or "" for a in (data.get("attachments") or []) if isinstance(a, dict)]
+        # BCC spam: mass-mail blasts are addressed To a third party with support
+        # only in BCC — real customers write TO a support inbox (#345005 was
+        # "To: jenniferkinzler.it@outlook.com" with support blind-copied).
+        SUPPORT_DOMAINS = ("viewlift", "fox.com", "spacecityhn", "monumentalsports",
+                           "livgolf", "dirtvision", "altitude", "freshdesk")
+        recipients = [str(e).lower() for e in (
+            (data.get("to_emails") or t.get("to_emails") or []) + (data.get("cc_emails") or [])
+        )]
+        bcc_spam = bool(recipients) and not any(d in r_ for r_ in recipients for d in SUPPORT_DOMAINS)
         has_agent_reply = any(
             not c.get("incoming") and not c.get("private")
             for c in (convs if isinstance(convs, list) else [])
@@ -831,6 +843,7 @@ def _scan_eligible_pool(max_age_hours: int = 5, force: bool = False):
         # type-based classification is always trusted.
         heuristic_spam = (
             any(k in spam_scan for k in SPAM_SUBJECT_KW)
+            or bcc_spam
             or _looks_like_phishing(t.get("subject", ""), description + " " + last_msg, att_names, has_agent_reply)
         )
         # data.get("spam") is Freshdesk's own boolean set by "Mark as spam" —
