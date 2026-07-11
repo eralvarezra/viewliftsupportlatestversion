@@ -468,7 +468,12 @@ async def generate(
     # (usually a failed payment) IS the customer's problem — let the full flow
     # handle it with the SUSPENDED context instead of the canned template.
     _cms_suspended = "SUSPEND" in (((request.cms_account or {}).get("subscription_status")) or "").upper()
-    if request.cms_no_subscription and not _cms_suspended and parsed_data.ticket_type == "billing" and not _no_sub_already_sent and not _early_has_agent_notes:
+    # "B2C No Subscription" is a FIRST-CONTACT template only: in an ongoing
+    # thread the missing subscription is usually known/expected context (e.g. a
+    # refund we processed, a season-ticket comp account being set up — #344960),
+    # so the full flow must answer the actual question instead.
+    _is_first_contact = "[Agent Reply]" not in request.message and "[Customer Reply]" not in request.message
+    if request.cms_no_subscription and _is_first_contact and not _cms_suspended and parsed_data.ticket_type == "billing" and not _no_sub_already_sent and not _early_has_agent_notes:
         no_sub = db.query(CannedResponse).filter(
             CannedResponse.title == "B2C No Subscription"
         ).first()
