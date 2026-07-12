@@ -397,8 +397,23 @@ def cms_lookup(
 ):
     token = _get_stored_token(db, site=site)
     if not token:
-        return {"found": False, "email": email, "token_error": True}
+        return {"found": False, "email": email, "token_error": True,
+                "message": f"CMS token for {site} could not be refreshed — renew it (Profile → CMS token)."}
     data = fetch_cms_data(email, db, include_qos=True, site=site)
+    if data and data.get("__auth_error"):
+        # Token rejected by the CMS — force one re-login and retry before
+        # telling the admin to renew manually.
+        result = _login_step1(db, site=site)
+        if result.get("ok") and result.get("token") and not result.get("needs_otp"):
+            data = fetch_cms_data(email, db, include_qos=True, site=site)
+        if data and data.get("__auth_error"):
+            return {"found": False, "email": email, "token_error": True,
+                    "message": f"CMS token for {site} expired and auto-refresh needs attention — renew it (Profile → CMS token)."}
+        if not result.get("ok") or result.get("needs_otp"):
+            hint = "enter the OTP in Profile → CMS token" if result.get("needs_otp") else "renew it (Profile → CMS token)"
+            if data is None or (data and data.get("__auth_error")):
+                return {"found": False, "email": email, "token_error": True,
+                        "message": f"CMS token for {site} expired — {hint}."}
     if not data:
         return {"found": False, "email": email}
     acct = data.get("account", {})
@@ -502,6 +517,10 @@ def fetch_cms_data(email: str, db: Session, include_qos: bool = True, user_id: O
                 "query": {"site": site_slug, "totalCount": True},
                 "body": {"searchTerm": email.lower(), "offset": 0, "limit": 5, "type": "email"},
             }, headers=cms_headers, timeout=TIMEOUT)
+            if r.status_code == 401:
+                # Token rejected at runtime (expired/revoked despite local expiry
+                # looking fine) — distinguish from "account not found".
+                return {"__auth_error": True}
             users = r.json().get("users", [])
             match = next((u for u in users if (u.get("identity", {}).get("email") or "").lower() == email.lower()), None)
             if not match:

@@ -245,7 +245,7 @@ export default function Generate() {
         agent_notes: (notes || '').trim() || null,
         cms_account: cms?.found ? cms : null,
         checked_emails: checkedEmails.length > 0 ? checkedEmails : null,
-        cms_not_found: cms !== null && !cms?.found,
+        cms_not_found: cms !== null && !cms?.found && !cms?.token_error,
         cms_no_subscription: !!(cms?.found && !cms?.is_subscribed),
       })
 
@@ -300,7 +300,7 @@ export default function Generate() {
         images: screenshots.length > 0 ? screenshots.map(s => ({ base64: s.base64, media_type: s.mediaType })) : null,
         agent_notes: agentNotes.trim() || null,
         cms_account: cmsInfo?.found ? cmsInfo : null,
-        cms_not_found: cmsInfo !== null && !cmsInfo?.found,
+        cms_not_found: cmsInfo !== null && !cmsInfo?.found && !cmsInfo?.token_error,
         cms_no_subscription: !!(cmsInfo?.found && !cmsInfo?.is_subscribed),
       })
 
@@ -504,6 +504,9 @@ export default function Generate() {
           {
             finalCmsInfo = cr.data
             setCmsInfo(cr.data)
+            if (cr.data?.token_error) {
+              toast.error(cr.data.message || `CMS token for ${cmsSite} expired — renew it in Profile → CMS token.`, { duration: 9000, icon: '🔑' })
+            }
             if (!cr.data.found || (cr.data.found && !cr.data.is_subscribed)) {
               const thread = r.data.full_thread || r.data.description || ''
               const requesterLocal = requesterEmail.split('@')[0]
@@ -1469,10 +1472,31 @@ end_of_access: 2026-05-18`}
         {/* Center Panel - Response */}
         <div className="space-y-6 min-w-0">
           {/* B2C No Account — shown when CMS lookup found nothing */}
+          {/* CMS token expired — the lookup could not run, don't imply "no account" */}
+          {cmsInfo?.token_error && fdTicket?.id && (
+            <div className="bg-red-50 dark:bg-red-900/20 border border-red-300 dark:border-red-600 rounded-lg p-4 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="text-base shrink-0">🔑</span>
+                <p className="text-sm text-red-800 dark:text-red-300 font-medium">
+                  {cmsInfo.message || 'CMS token expired — the account could not be checked. Renew the CMS token before sending.'}
+                </p>
+              </div>
+              <a
+                href="/profile"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="shrink-0 px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-semibold rounded-md transition-colors whitespace-nowrap"
+              >
+                Renew token ↗
+              </a>
+            </div>
+          )}
+          {/* B2C No Account — shown when CMS lookup found nothing */}
           {(() => {
             // Alt emails from the thread are auto-tried during load, so if we're
             // still not found here, none resolved — offer the no-account reply.
-            if (!cmsInfo || cmsInfo.found || !fdTicket?.id) return null
+            // A token error is NOT "no account" — suppress this block for it.
+            if (!cmsInfo || cmsInfo.found || cmsInfo.token_error || !fdTicket?.id) return null
             const noAcctAlreadySent = customerMessage.toLowerCase().includes('do not see an account associated with')
             return (
               <div className="bg-orange-50 dark:bg-orange-900/20 border border-orange-300 dark:border-orange-600 rounded-lg p-4 space-y-2">
