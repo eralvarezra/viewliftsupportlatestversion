@@ -1247,7 +1247,9 @@ export default function Generate() {
                                 ? <span className="ml-2 px-1.5 py-0.5 rounded bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-400" title="TV Everywhere — subscribed through their TV provider">TVE · via TV provider</span>
                                 : (cmsInfo.subscription_status || '').toUpperCase().includes('SUSPEND')
                                   ? <span className="ml-2 px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-400">Suspended</span>
-                                  : <span className="ml-2 px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400">Not subscribed</span>
+                                  : (cmsInfo.subscription_status || '').toUpperCase().includes('CANCEL')
+                                    ? <span className="ml-2 px-1.5 py-0.5 rounded bg-orange-100 dark:bg-orange-900/40 text-orange-700 dark:text-orange-400">Cancelled</span>
+                                    : <span className="ml-2 px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400">Not subscribed</span>
                             }
                           </p>
                           <a
@@ -1533,6 +1535,9 @@ end_of_access: 2026-05-18`}
             if (!cmsInfo?.found || cmsInfo?.is_subscribed || !fdTicket?.id) return null
             if ((cmsInfo?.subscription_status || '').toUpperCase().includes('SUSPEND')) return null
             if (isTveAccount(cmsInfo)) return null
+            // Account found WITH a plan/billing history (even cancelled/expired):
+            // "No Subscription" would be wrong — we clearly have their account.
+            if (cmsInfo?.plan || cmsInfo?.plan_name || (cmsInfo?.charges && cmsInfo.charges.length)) return null
             const msgLower = customerMessage.toLowerCase()
             const noSubMatch = msgLower.match(/unable to locate an active subscription associated with the email address\s+([\w._%+\-]+@[\w.\-]+\.[a-z]{2,})/i)
             const noSubSentEmail = noSubMatch ? noSubMatch[1].toLowerCase() : null

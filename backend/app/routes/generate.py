@@ -192,6 +192,15 @@ def _build_agent_notes(agent_notes: str, cms_account: dict) -> str:
                 "subscription and do NOT suggest subscribing or paying. Their access/auth issues "
                 "usually involve the TV-provider login flow — troubleshoot their actual issue."
             )
+        elif "CANCEL" in _sub_status:
+            sub_status_line = (
+                "SUBSCRIBER STATUS: CANCELLED — the account EXISTS and its subscription plan is visible "
+                "below but has been CANCELLED. Do NOT say 'we could not locate an active subscription' and "
+                "do NOT ask the customer which platform they used — we already have their account and billing "
+                "history. If they are asking for the cancellation, CONFIRM the subscription is cancelled. If "
+                "they mention an accidental charge or want a refund, acknowledge the cancellation and address "
+                "the refund per policy using the billing history shown below."
+            )
         elif "SUSPEND" in _sub_status:
             sub_status_line = (
                 "SUBSCRIBER STATUS: SUSPENDED — the account EXISTS and has a subscription, but it is "
@@ -484,12 +493,18 @@ async def generate(
     _cms_acct = request.cms_account or {}
     _cms_tve = ((_cms_acct.get("payment_handler") or "").upper() == "TVE"
                 or ((_cms_acct.get("plan") or "").lower().strip().startswith("tve")))
+    # Account FOUND with a real subscription plan/billing history (even cancelled
+    # or expired) is not "no subscription" — the "No Subscription" template asks
+    # the customer to identify their platform, which is wrong when we already see
+    # their account. Let the full flow answer with the cancellation/refund context.
+    _cms_has_history = bool(_cms_acct.get("found") and (
+        _cms_acct.get("plan") or _cms_acct.get("plan_name") or _cms_acct.get("charges")))
     # "B2C No Subscription" is a FIRST-CONTACT template only: in an ongoing
     # thread the missing subscription is usually known/expected context (e.g. a
     # refund we processed, a season-ticket comp account being set up — #344960),
     # so the full flow must answer the actual question instead.
     _is_first_contact = "[Agent Reply]" not in request.message and "[Customer Reply]" not in request.message
-    if request.cms_no_subscription and _is_first_contact and not _cms_suspended and not _cms_tve and parsed_data.ticket_type == "billing" and not _no_sub_already_sent and not _early_has_agent_notes:
+    if request.cms_no_subscription and _is_first_contact and not _cms_suspended and not _cms_tve and not _cms_has_history and parsed_data.ticket_type == "billing" and not _no_sub_already_sent and not _early_has_agent_notes:
         no_sub = db.query(CannedResponse).filter(
             CannedResponse.title == "B2C No Subscription"
         ).first()
