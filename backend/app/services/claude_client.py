@@ -86,6 +86,8 @@ class ClaudeClient:
             context=parsed_dict.get("context"),
             payment_handler=parsed_dict.get("payment_handler"),
             ticket_type=parsed_dict.get("ticket_type"),
+            is_spam=bool(parsed_dict.get("is_spam", False)),
+            spam_reason=parsed_dict.get("spam_reason"),
         ), tokens
 
     _THIRD_PARTY_STEPS: Dict[str, str] = {

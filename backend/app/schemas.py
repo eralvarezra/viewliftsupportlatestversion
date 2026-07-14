@@ -99,6 +99,8 @@ class ParsedData(BaseModel):
     payment_handler: Optional[str] = None
     ticket_type: Optional[str] = None  # "technical" | "billing"
     incident_dates: Optional[list] = None  # dates the customer says the problem occurred (YYYY-MM-DD)
+    is_spam: bool = False  # parser flagged the message as spam/solicitation/phishing (skip generation)
+    spam_reason: Optional[str] = None
 
     @field_validator(
         "customer_name", "customer_email", "account_number", "device",

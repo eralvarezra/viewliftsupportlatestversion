@@ -391,6 +391,23 @@ async def generate(
         images=images_dicts,
     )
 
+    # Step 1a: Spam short-circuit. The cheap Haiku parse already read the whole
+    # message; if it flagged spam, skip the expensive Sonnet generation entirely.
+    if parsed_data.is_spam:
+        note = (
+            "This message was flagged as spam/solicitation and is not a genuine support request"
+            + (f" ({parsed_data.spam_reason})" if parsed_data.spam_reason else "")
+            + ". No customer-facing response was generated. Mark the ticket as spam."
+        )
+        return GenerateResponse(
+            parsed=parsed_data,
+            response=None,
+            bot_notes=note,
+            faq_sources=[],
+            canned_sources=[],
+            history_id=None,
+        )
+
     # Step 1b: Detect "issue resolved" messages → return B2C Last Response directly
     # Only fires if NO active-problem signals exist in the original message
     check_text = f"{request.message} {parsed_data.problem_summary or ''}"

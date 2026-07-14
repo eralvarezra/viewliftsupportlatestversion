@@ -144,6 +144,13 @@ Extract the following information:
   subscription cancellation, payment disputes, payment issues, credits, reimbursements, billing errors.
   Use "technical" for everything else: login issues, device problems, playback errors, access issues,
   account setup, location issues, TV provider issues, app errors, password reset.
+- is_spam: true ONLY if this is clearly NOT a genuine customer support request — i.e. a marketing/
+  sales solicitation (SEO, web design, advertising, factory/wholesale supply, partnership pitch),
+  a phishing/security-scam email (fake payment/SWIFT confirmation, "verify your account", "update your
+  firewall"), an auto-reply/out-of-office, or other junk aimed at the support inbox. A real customer
+  with ANY billing, account, access, playback, login, or technical issue is NEVER spam. When unsure,
+  use false.
+- spam_reason: one short phrase explaining why (e.g. "SEO solicitation", "payment phishing"), or null if not spam.
 
 Full input content:
 {message}
@@ -161,7 +168,9 @@ Example format:
     "account_active": true,
     "payment_handler": "Stripe",
     "incident_dates": ["2026-07-03"],
-    "ticket_type": "technical"
+    "ticket_type": "technical",
+    "is_spam": false,
+    "spam_reason": null
 }}
 """
 
