@@ -167,9 +167,24 @@ def _parse_response_sections(raw: str) -> Tuple[Optional[str], Optional[str], Op
         # Strip trailing separators from bot_notes
         if bot_notes:
             bot_notes = re.sub(r'\s*[-—]{2,}\s*$', '', bot_notes).strip()
-        return email_part, None, bot_notes, False
+        # Split off an internal [NEXT STEPS] block if the model appended one to
+        # the email — it must NEVER reach the customer-facing reply.
+        email_part, next_steps = _split_next_steps(email_part)
+        return email_part, next_steps, bot_notes, False
 
-    return raw, None, bot_notes, False
+    email_part, next_steps = _split_next_steps(raw)
+    return email_part, next_steps, bot_notes, False
+
+
+def _split_next_steps(text: str) -> Tuple[str, Optional[str]]:
+    """Remove a trailing [NEXT STEPS] block from a customer email; return
+    (customer_text, next_steps). Internal-only — never sent to the customer."""
+    m = re.search(r"\[NEXT\s*STEPS\]", text or "", re.IGNORECASE)
+    if not m:
+        return (text or "").strip(), None
+    customer = text[:m.start()].strip()
+    next_steps = text[m.end():].strip()
+    return customer, (next_steps or None)
 
 
 
@@ -758,6 +773,14 @@ async def generate(
     elif not needs_verification:
         customer_response = _fix_bold(raw_response)
         customer_response = _ensure_signatures(customer_response, parsed_data.customer_name)
+
+    # Final safety net: an internal [NEXT STEPS] block must never reach the
+    # customer. If any path left it in, split it out into next_steps.
+    if customer_response and re.search(r"\[NEXT\s*STEPS\]", customer_response, re.IGNORECASE):
+        customer_response, _leaked_ns = _split_next_steps(customer_response)
+        if _leaked_ns and not next_steps:
+            next_steps = _leaked_ns
+        customer_response = _ensure_signatures(customer_response.strip(), parsed_data.customer_name)
 
     # A verification-only output ([NEEDS_VERIFICATION], no customer response) is an internal
     # step, not a response — don't record it in history. The final response after CMS
