@@ -328,25 +328,45 @@ async def get_freshdesk_ticket(
     }
 
 
+# The Freshdesk "SPAM" scenario automation runs only through Freshdesk's internal
+# /api/_/ (cookie-session) endpoint; the public v2 execute_scenario 404s. So we
+# replicate its exact effect via v2 instead — verified against a real execution:
+#   status -> Closed(5), type -> "Auto Reply Email / Spam",
+#   Client Name -> "Viewlift Internal", Platform/Support Plan -> "None", + note "Spam."
+SPAM_TICKET_FIELDS = {
+    "status": 5,
+    "type": "Auto Reply Email / Spam",
+    "custom_fields": {
+        "cf_b2b_client_name": "Viewlift Internal",
+        "cf_platform": "None",
+        "cf_support_plan": "None",
+    },
+}
+
+
 @router.post("/ticket/{ticket_id}/mark-spam")
 async def mark_ticket_spam(
     ticket_id: int,
     current_user: User = Depends(get_current_user),
 ):
-    """Run the Freshdesk SPAM scenario automation on this ticket (same as the
-    manual 'Execute scenarios → SPAM' action)."""
+    """Mark a ticket as spam — replicates the Freshdesk 'SPAM' scenario:
+    close it, set type/fields, and add a 'Spam.' private note."""
     auth = (current_user.freshdesk_api_key, "X") if current_user.freshdesk_api_key else FRESHDESK_AUTH
     r = requests.put(
-        f"{FRESHDESK_BASE}/tickets/{ticket_id}/execute_scenario",
-        auth=auth,
-        json={"scenario_id": SPAM_SCENARIO_ID},
-        timeout=15,
+        f"{FRESHDESK_BASE}/tickets/{ticket_id}",
+        auth=auth, json=SPAM_TICKET_FIELDS, timeout=15,
     )
     if r.status_code == 429:
         raise _rate_limit_error(r)
-    if r.status_code not in (200, 204):
+    if r.status_code not in (200, 201):
         raise HTTPException(status_code=502,
-                            detail=f"Freshdesk scenario failed ({r.status_code}): {r.text[:200]}")
+                            detail=f"Freshdesk update failed ({r.status_code}): {r.text[:200]}")
+    # Best-effort private note documenting the spam decision (never fails the action).
+    try:
+        requests.post(f"{FRESHDESK_BASE}/tickets/{ticket_id}/notes",
+                      auth=auth, json={"body": "Spam.", "private": True}, timeout=10)
+    except Exception:
+        pass
     return {"ok": True}
 
 
