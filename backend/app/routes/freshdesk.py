@@ -1092,7 +1092,12 @@ async def get_queues(current_user: User = Depends(get_current_user)):
             break
         return []
 
+    from datetime import timedelta
     now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(hours=24)
+    # Freshdesk search only does date granularity, so query from ~2 days back and
+    # filter to a precise 24h window client-side.
+    since_date = (now - timedelta(days=2)).strftime("%Y-%m-%d")
     status_q = " OR ".join(f"status:{s}" for s in _QUEUE_STATUSES)
     by_platform = {}
     seen = set()
@@ -1100,7 +1105,7 @@ async def get_queues(current_user: User = Depends(get_current_user)):
         by_platform.setdefault(label, [])
         page = 1
         while True:
-            results = _search(f"group_id:{gid} AND ({status_q})", page)
+            results = _search(f"group_id:{gid} AND ({status_q}) AND updated_at:>'{since_date}'", page)
             if not results:
                 break
             for t in results:
@@ -1112,6 +1117,8 @@ async def get_queues(current_user: User = Depends(get_current_user)):
                 if updated:
                     try:
                         dt = datetime.fromisoformat(updated.replace("Z", "+00:00"))
+                        if dt < cutoff:
+                            continue  # last activity older than 24h — skip
                         hrs = round((now - dt).total_seconds() / 3600, 1)
                     except Exception:
                         hrs = None
