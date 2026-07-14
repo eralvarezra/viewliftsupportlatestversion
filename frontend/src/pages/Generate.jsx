@@ -378,17 +378,10 @@ export default function Generate() {
     setQueuesOpen(true)
     setQueuesLoading(true)
     try {
-      const res = await client.get('/freshdesk/automated-queue', { params: { max_age_hours: 12 } })
-      // group workable (non-spam) tickets by platform, longest-waiting first
+      const res = await client.get('/freshdesk/queues')
+      const src = res.data.queues || {}
       const map = {}
-      QUEUE_PLATFORMS.forEach(p => { map[p] = [] })
-      ;(res.data.tickets || []).forEach(t => {
-        if (t.spam_flag) return
-        const p = t.platform
-        if (!map[p]) map[p] = []
-        map[p].push(t)
-      })
-      Object.values(map).forEach(list => list.sort((a, b) => (b.hours_ago || 0) - (a.hours_ago || 0)))
+      QUEUE_PLATFORMS.forEach(p => { map[p] = src[p] || [] })
       setQueues(map)
     } catch (err) {
       toast.error(apiErr(err, 'Failed to load queues'))
@@ -1978,7 +1971,7 @@ end_of_access: 2026-05-18`}
                           </span>
                         </button>
                         {isOpen && (
-                          <div className="px-2 pb-2 space-y-1">
+                          <div className="px-2 pb-2 space-y-1 max-h-96 overflow-y-auto">
                             {list.length === 0 ? (
                               <p className="text-[11px] text-gray-400 px-1 py-1">No tickets waiting</p>
                             ) : list.map(t => (
@@ -1986,10 +1979,10 @@ end_of_access: 2026-05-18`}
                                 <div className="min-w-0 flex-1">
                                   <p className="text-xs font-medium text-gray-800 dark:text-gray-200 truncate">#{t.id} {t.subject}</p>
                                   <p className="text-[11px] text-gray-400">
-                                    <span className={t.hours_ago >= 4 ? 'text-red-500 font-semibold' : t.hours_ago >= 2 ? 'text-amber-500' : ''}>
-                                      {t.hours_ago != null ? `${t.hours_ago}h waiting` : ''}
+                                    <span className="px-1.5 py-0.5 rounded-full bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400">{t.status}</span>
+                                    <span className={`ml-1 ${t.hours_since_update >= 24 ? 'text-red-500 font-semibold' : t.hours_since_update >= 8 ? 'text-amber-500' : ''}`}>
+                                      {t.hours_since_update != null ? `${t.hours_since_update}h since last update` : ''}
                                     </span>
-                                    {t.refund_flag && <span className="ml-1 text-amber-600 dark:text-amber-400">· refund</span>}
                                   </p>
                                 </div>
                                 <button

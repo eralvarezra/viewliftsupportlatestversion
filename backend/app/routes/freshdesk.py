@@ -1048,6 +1048,92 @@ async def get_automated_queue(max_age_hours: int = 5, current_user: User = Depen
     return {"tickets": out, "count": len(out), "max_age_hours": max_age_hours}
 
 
+# ── Live queues panel (Generate page) ────────────────────────────────────────
+# All open tickets per platform, filtered ONLY by status (not resolved/closed),
+# with no time cutoff. Lightweight: uses Freshdesk search only (no per-ticket
+# conversation fetch), so it can list the full queue cheaply.
+_QUEUE_GROUPS = {
+    43000666076: "SCHN+",
+    43000663122: "Monumental Sports",
+    43000663120: "Monumental Sports",
+    43000662781: "DirtVision",
+    43000664192: "Altitude Sports",
+}
+# Non-terminal statuses (everything except Resolved=4 and Closed=5).
+_QUEUE_STATUSES = [2, 3, 6, 7, 12, 15]
+_QUEUE_STATUS_LABELS = {
+    2: "Open", 3: "Pending", 6: "Waiting on Customer",
+    7: "Waiting on Third Party", 12: "Waiting on L1", 15: "Waiting on L1",
+}
+_QUEUE_CACHE = {"data": None, "ts": 0.0}
+
+
+@router.get("/queues")
+async def get_queues(current_user: User = Depends(get_current_user)):
+    """Open tickets grouped by platform, filtered by status only (not resolved/
+    closed), no time cutoff. Cached 60s and shared across agents."""
+    import time as _t
+    from datetime import datetime, timezone
+    now_ts = _t.time()
+    if _QUEUE_CACHE["data"] is not None and (now_ts - _QUEUE_CACHE["ts"]) < 60:
+        return _QUEUE_CACHE["data"]
+    if _rate_limit_remaining() > 0 and _QUEUE_CACHE["data"] is not None:
+        return _QUEUE_CACHE["data"]
+
+    def _search(query, page=1):
+        for _ in range(3):
+            r = requests.get(f"{FRESHDESK_BASE}/search/tickets", auth=FRESHDESK_AUTH,
+                             params={"query": f'"{query}"', "page": page}, timeout=15)
+            if r.status_code == 429:
+                _note_rate_limit(r.headers.get("Retry-After") or 60)
+                return []
+            if r.status_code == 200:
+                return r.json().get("results", [])
+            break
+        return []
+
+    now = datetime.now(timezone.utc)
+    status_q = " OR ".join(f"status:{s}" for s in _QUEUE_STATUSES)
+    by_platform = {}
+    seen = set()
+    for gid, label in _QUEUE_GROUPS.items():
+        by_platform.setdefault(label, [])
+        page = 1
+        while True:
+            results = _search(f"group_id:{gid} AND ({status_q})", page)
+            if not results:
+                break
+            for t in results:
+                if t["id"] in seen:
+                    continue
+                seen.add(t["id"])
+                updated = t.get("updated_at")
+                hrs = None
+                if updated:
+                    try:
+                        dt = datetime.fromisoformat(updated.replace("Z", "+00:00"))
+                        hrs = round((now - dt).total_seconds() / 3600, 1)
+                    except Exception:
+                        hrs = None
+                by_platform[label].append({
+                    "id": t["id"],
+                    "subject": t.get("subject", ""),
+                    "status": _QUEUE_STATUS_LABELS.get(t.get("status"), str(t.get("status"))),
+                    "hours_since_update": hrs,
+                    "created_at": t.get("created_at"),
+                    "url": f"https://{settings.FRESHDESK_DOMAIN}/a/tickets/{t['id']}",
+                })
+            if len(results) < 30 or page >= 10:
+                break
+            page += 1
+    for lst in by_platform.values():
+        lst.sort(key=lambda x: (x["hours_since_update"] is None, -(x["hours_since_update"] or 0)))
+    payload = {"queues": by_platform, "rate_limited_seconds": _rate_limit_remaining()}
+    _QUEUE_CACHE["data"] = payload
+    _QUEUE_CACHE["ts"] = now_ts
+    return payload
+
+
 # ── Full Automated: shared claim pool (multi-admin auto-assignment) ──────────
 from app.models import AutomatedClaim as _AutoClaim  # noqa: E402
 
