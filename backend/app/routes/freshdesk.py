@@ -1092,47 +1092,89 @@ async def get_queues(current_user: User = Depends(get_current_user)):
             break
         return []
 
+    import html as _html
     from datetime import timedelta
+    from concurrent.futures import ThreadPoolExecutor
     now = datetime.now(timezone.utc)
     cutoff = now - timedelta(hours=24)
-    # Freshdesk search only does date granularity, so query from ~2 days back and
-    # filter to a precise 24h window client-side.
     since_date = (now - timedelta(days=2)).strftime("%Y-%m-%d")
     status_q = " OR ".join(f"status:{s}" for s in _QUEUE_STATUSES)
-    by_platform = {}
-    seen = set()
+
+    # 1. Collect candidate tickets (24h activity window, non-terminal statuses).
+    candidates = {}  # id -> (ticket, label)
     for gid, label in _QUEUE_GROUPS.items():
-        by_platform.setdefault(label, [])
         page = 1
         while True:
             results = _search(f"group_id:{gid} AND ({status_q}) AND updated_at:>'{since_date}'", page)
             if not results:
                 break
             for t in results:
-                if t["id"] in seen:
+                if t["id"] in candidates:
                     continue
-                seen.add(t["id"])
                 updated = t.get("updated_at")
-                hrs = None
                 if updated:
                     try:
-                        dt = datetime.fromisoformat(updated.replace("Z", "+00:00"))
-                        if dt < cutoff:
-                            continue  # last activity older than 24h — skip
-                        hrs = round((now - dt).total_seconds() / 3600, 1)
+                        if datetime.fromisoformat(updated.replace("Z", "+00:00")) < cutoff:
+                            continue
                     except Exception:
-                        hrs = None
-                by_platform[label].append({
-                    "id": t["id"],
-                    "subject": t.get("subject", ""),
-                    "status": _QUEUE_STATUS_LABELS.get(t.get("status"), str(t.get("status"))),
-                    "hours_since_update": hrs,
-                    "created_at": t.get("created_at"),
-                    "url": f"https://{settings.FRESHDESK_DOMAIN}/a/tickets/{t['id']}",
-                })
+                        pass
+                candidates[t["id"]] = (t, label)
             if len(results) < 30 or page >= 10:
                 break
             page += 1
+
+    # 2. For each candidate, look at the thread: keep only tickets whose LAST
+    #    public message is from the CUSTOMER (incoming) — i.e. waiting on us.
+    def _analyze(item):
+        t, label = item
+        tid = t["id"]
+        try:
+            cr = requests.get(f"{FRESHDESK_BASE}/tickets/{tid}/conversations", auth=FRESHDESK_AUTH, timeout=10)
+            if cr.status_code == 429:
+                _note_rate_limit(cr.headers.get("Retry-After") or 60)
+                return None
+            convs = cr.json() if cr.status_code == 200 else []
+        except Exception:
+            return None
+        last_dt, last_incoming = None, None
+        for c in convs if isinstance(convs, list) else []:
+            if c.get("private"):
+                continue
+            ts = c.get("created_at")
+            if not ts:
+                continue
+            try:
+                dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            except Exception:
+                continue
+            if last_dt is None or dt > last_dt:
+                last_dt, last_incoming = dt, bool(c.get("incoming"))
+        # No public reply yet → the ticket creation IS the customer's message.
+        if last_dt is None:
+            ts = t.get("created_at")
+            try:
+                last_dt = datetime.fromisoformat(ts.replace("Z", "+00:00")) if ts else None
+            except Exception:
+                last_dt = None
+            last_incoming = True
+        if not last_incoming or last_dt is None or last_dt < cutoff:
+            return None  # last word was the agent's, or older than 24h
+        hrs = round((now - last_dt).total_seconds() / 3600, 1)
+        return label, {
+            "id": tid,
+            "subject": t.get("subject", ""),
+            "status": _QUEUE_STATUS_LABELS.get(t.get("status"), str(t.get("status"))),
+            "hours_since_update": hrs,
+            "created_at": t.get("created_at"),
+            "url": f"https://{settings.FRESHDESK_DOMAIN}/a/tickets/{tid}",
+        }
+
+    by_platform = {label: [] for label in set(_QUEUE_GROUPS.values())}
+    if candidates:
+        with ThreadPoolExecutor(max_workers=12) as pool:
+            for res in pool.map(_analyze, list(candidates.values())):
+                if res:
+                    by_platform[res[0]].append(res[1])
     for lst in by_platform.values():
         lst.sort(key=lambda x: (x["hours_since_update"] is None, -(x["hours_since_update"] or 0)))
     payload = {"queues": by_platform, "rate_limited_seconds": _rate_limit_remaining()}
