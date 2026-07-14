@@ -140,6 +140,8 @@ export default function Generate() {
   const [showPreview, setShowPreview] = useState(false)
   const [noteImages, setNoteImages] = useState([])
   const [isSending, setIsSending] = useState(false)
+  const [markingSpam, setMarkingSpam] = useState(false)
+  const [spamMarked, setSpamMarked] = useState(false)
   const [isEditingResponse, setIsEditingResponse] = useState(false)
   const responseEditRef = useRef(null)
   const previewEditRef = useRef(null)
@@ -328,6 +330,20 @@ export default function Generate() {
     }
   }
 
+  const handleMarkSpam = async () => {
+    if (!fdTicket?.id) return
+    setMarkingSpam(true)
+    try {
+      await client.post(`/freshdesk/ticket/${fdTicket.id}/mark-spam`)
+      setSpamMarked(true)
+      toast.success('Ran the SPAM scenario in Freshdesk')
+    } catch (err) {
+      toast.error(apiErr(err, 'Failed to run the SPAM scenario'))
+    } finally {
+      setMarkingSpam(false)
+    }
+  }
+
   const rateResponse = async (value) => {
     if (!historyId) return
     const prev = responseRating
@@ -450,6 +466,7 @@ export default function Generate() {
     setNextSteps(null)
     setBotNotes(null)
     setNeedsVerification(false)
+    setSpamMarked(false)
     try {
       const r = await client.get(`/freshdesk/ticket/${id}`)
       setFdTicket(r.data)
@@ -1204,6 +1221,26 @@ export default function Generate() {
                       <span className="px-1.5 py-0.5 rounded bg-blue-100 dark:bg-blue-800 text-blue-700 dark:text-blue-300">{fdTicket.status}</span>
                     </div>
                     {fdTicket.requester_name && <p className="text-gray-500 dark:text-gray-400">From: {fdTicket.requester_name} {fdTicket.requester_email ? `(${fdTicket.requester_email})` : ''}</p>}
+                    {fdTicket.spam_detected && (
+                      <div className="flex items-start justify-between gap-2 mt-1 p-2 rounded-md bg-red-50 dark:bg-red-900/30 border border-red-300 dark:border-red-600">
+                        <div className="min-w-0">
+                          <p className="text-red-800 dark:text-red-300 font-semibold">🚫 Detected as spam</p>
+                          {fdTicket.spam_reason && <p className="text-red-700 dark:text-red-400">{fdTicket.spam_reason}</p>}
+                        </div>
+                        {spamMarked ? (
+                          <span className="shrink-0 px-2.5 py-1 rounded-md bg-red-100 dark:bg-red-800/50 text-red-700 dark:text-red-300 font-semibold whitespace-nowrap">✓ Marked</span>
+                        ) : (
+                          <button
+                            onClick={handleMarkSpam}
+                            disabled={markingSpam}
+                            className="shrink-0 px-2.5 py-1 bg-red-600 hover:bg-red-700 disabled:bg-red-400 text-white font-semibold rounded-md transition-colors whitespace-nowrap"
+                            title="Runs the Freshdesk SPAM scenario on this ticket"
+                          >
+                            {markingSpam ? 'Running…' : '🚫 Mark as Spam'}
+                          </button>
+                        )}
+                      </div>
+                    )}
                     {fdTicket.requester_email && isSupportEmail(fdTicket.requester_email) && (
                       <div className="flex items-start gap-2 mt-1 p-2 rounded-md bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-300 dark:border-yellow-600">
                         <svg className="w-4 h-4 text-yellow-500 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">

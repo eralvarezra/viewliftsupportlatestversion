@@ -81,6 +81,71 @@ BRAND_TOKENS = [
 ]
 
 
+# Freshdesk scenario automation that marks a ticket as SPAM (Execute scenarios → SPAM).
+SPAM_SCENARIO_ID = 43001058266
+
+# Domains we own — a real customer never sends from one of these.
+SUPPORT_DOMAINS = ("viewlift", "fox.com", "spacecityhn", "monumentalsports",
+                   "livgolf", "dirtvision", "altitude", "freshdesk")
+
+# Marketing / non-support subject-body signals (fallback when Freshdesk did not
+# already classify the ticket type as spam/auto-reply).
+SPAM_SUBJECT_KW = [
+    "sponsorship", "newsletter", "webinar", "press release",
+    "partnership opportunity", "advertising opportunity", "advertise with us",
+    "advertise on your", "advertising services", "ad placement",
+    "guest post", "backlink",
+    "ceo update", "quarterly update", "promo code", "limited time offer",
+    "act now", "exclusive offer", "boost your", "grow your", "seo audit",
+    "link building", "collaboration opportunity", "invoice attached",
+    "wire transfer", "out of office", "automatic reply", "auto-reply",
+    "delivery status notification", "undeliverable",
+    "website upgrade", "website redesign", "web design", "website design",
+    "wordpress", "logo design", "ui/ux", "e-commerce website",
+    "we specialize in", "see our portfolio", "our portfolio",
+    "digital marketing", "seo services", "mobile app development",
+    "design and development company", "increase your sales",
+    "rank your website", "lead generation service",
+    "strengthen their visibility", "we're helping businesses",
+    "brief introduction with more information", "visibility where customers search",
+]
+
+
+def _spam_verdict(data: dict, subject: str, description: str, last_msg: str,
+                  attachment_names=None, has_agent_reply: bool = False):
+    """Single source of truth for spam detection. Returns (is_spam, reason).
+
+    Used by both the automated pool scan and the manual ticket-load endpoint so
+    the two never disagree. Heuristics only fire on first-contact tickets;
+    Freshdesk's own spam/type flags are always authoritative."""
+    if not isinstance(data, dict):
+        data = {}
+    if bool(data.get("spam")) or bool(data.get("deleted")):
+        return True, "flagged spam in Freshdesk"
+    ttype = (data.get("type") or "").lower()
+    if "spam" in ttype or "auto reply" in ttype or "auto-reply" in ttype:
+        return True, "Freshdesk type is spam/auto-reply"
+
+    subj = (subject or "").lower()
+    scan = subj + " " + (description or "").lower() + " " + (last_msg or "").lower()
+    att_names = attachment_names or []
+    recipients = [str(e).lower() for e in ((data.get("to_emails") or []) + (data.get("cc_emails") or []))]
+    req = data.get("requester") or {}
+
+    if not has_agent_reply:
+        if any(k in scan for k in SPAM_SUBJECT_KW):
+            return True, "marketing/solicitation keywords"
+        if recipients and not any(d in r_ for r_ in recipients for d in SUPPORT_DOMAINS):
+            return True, "addressed to a non-support inbox (BCC blast)"
+        if any(k in scan for k in SECURITY_PHISHING_KW):
+            return True, "security/credential phishing"
+        if _looks_like_display_name_spoof(req.get("name"), req.get("email")):
+            return True, "sender display name spoofs a brand"
+        if _looks_like_phishing(subject, (description or "") + " " + (last_msg or ""), att_names, has_agent_reply):
+            return True, "payment/BEC phishing"
+    return False, ""
+
+
 def _looks_like_display_name_spoof(requester_name: str, requester_email: str) -> bool:
     """Display name impersonates a brand/support while the sender domain is not ours."""
     name = (requester_name or "").lower()
@@ -222,6 +287,21 @@ async def get_freshdesk_ticket(
 
     full_thread = _build_full_thread(t, conversations)
 
+    # Spam verdict (same logic as the automated pool) so the UI can offer to run
+    # the Freshdesk SPAM scenario instead of drafting a reply to junk.
+    import re as _re, html as _html
+    _desc = _re.sub(r"\s+", " ", _html.unescape(t.get("description_text") or "")).strip()
+    _last = ""
+    _has_agent = False
+    for _cv in (conversations if isinstance(conversations, list) else []):
+        if not _cv.get("private") and not _cv.get("incoming"):
+            _has_agent = True
+        if _cv.get("incoming") and not _cv.get("private"):
+            _last = _re.sub(r"\s+", " ", _html.unescape(_cv.get("body_text") or "")).strip()
+    _atts = [a.get("name") or "" for a in (t.get("attachments") or []) if isinstance(a, dict)]
+    _is_spam, _spam_reason = _spam_verdict(t, t.get("subject", ""), _desc, _last,
+                                           attachment_names=_atts, has_agent_reply=_has_agent)
+
     rl_remaining = r.headers.get("X-RateLimit-Remaining")
     rl_total = r.headers.get("X-RateLimit-Total")
 
@@ -237,6 +317,8 @@ async def get_freshdesk_ticket(
         "requester_name": t.get("requester", {}).get("name"),
         "requester_email": t.get("requester", {}).get("email"),
         "company": t.get("company", {}).get("name") if t.get("company") else None,
+        "spam_detected": _is_spam,
+        "spam_reason": _spam_reason,
         "url": f"https://{settings.FRESHDESK_DOMAIN}/a/tickets/{t['id']}",
         "group_id": t.get("group_id"),
         "client_name": (t.get("custom_fields") or {}).get("cf_b2b_client_name"),
@@ -244,6 +326,28 @@ async def get_freshdesk_ticket(
         "rate_limit_remaining": int(float(rl_remaining)) if rl_remaining else None,
         "rate_limit_total": int(float(rl_total)) if rl_total else 5000,
     }
+
+
+@router.post("/ticket/{ticket_id}/mark-spam")
+async def mark_ticket_spam(
+    ticket_id: int,
+    current_user: User = Depends(get_current_user),
+):
+    """Run the Freshdesk SPAM scenario automation on this ticket (same as the
+    manual 'Execute scenarios → SPAM' action)."""
+    auth = (current_user.freshdesk_api_key, "X") if current_user.freshdesk_api_key else FRESHDESK_AUTH
+    r = requests.put(
+        f"{FRESHDESK_BASE}/tickets/{ticket_id}/execute_scenario",
+        auth=auth,
+        json={"scenario_id": SPAM_SCENARIO_ID},
+        timeout=15,
+    )
+    if r.status_code == 429:
+        raise _rate_limit_error(r)
+    if r.status_code not in (200, 204):
+        raise HTTPException(status_code=502,
+                            detail=f"Freshdesk scenario failed ({r.status_code}): {r.text[:200]}")
+    return {"ok": True}
 
 
 @router.get("/tracker/{tracker_id}")
@@ -744,32 +848,6 @@ def _scan_eligible_pool(max_age_hours: int = 5, force: bool = False):
         "cancelar", "reimburse", "dispute",
     ]
 
-    # Marketing / non-support subject signals (fallback when Freshdesk did not
-    # already classify the ticket type as spam/auto-reply).
-    SPAM_SUBJECT_KW = [
-        "sponsorship", "newsletter", "webinar", "press release",
-        # "advertis" alone false-positived on customers saying "advertised"
-        # (ticket #340604) — only solicitation phrasings count.
-        "partnership opportunity", "advertising opportunity", "advertise with us",
-        "advertise on your", "advertising services", "ad placement",
-        "guest post", "backlink",
-        "ceo update", "quarterly update", "promo code", "limited time offer",
-        "act now", "exclusive offer", "boost your", "grow your", "seo audit",
-        "link building", "collaboration opportunity", "invoice attached",
-        "wire transfer", "out of office", "automatic reply", "auto-reply",
-        "delivery status notification", "undeliverable",
-        # Web-design / dev / marketing agency solicitations
-        "website upgrade", "website redesign", "web design", "website design",
-        "wordpress", "logo design", "ui/ux", "e-commerce website",
-        "we specialize in", "see our portfolio", "our portfolio",
-        "digital marketing", "seo services", "mobile app development",
-        "design and development company", "increase your sales",
-        "rank your website", "lead generation service",
-        # euphemistic cold-outreach phrasings that avoid saying "SEO" (#345005)
-        "strengthen their visibility", "we're helping businesses",
-        "brief introduction with more information", "visibility where customers search",
-    ]
-
     now = datetime.now(timezone.utc)
     cutoff = now - timedelta(hours=max_age_hours)
     since_date = (now - timedelta(hours=max_age_hours) - timedelta(days=1)).strftime("%Y-%m-%d")
@@ -863,38 +941,17 @@ def _scan_eligible_pool(max_age_hours: int = 5, force: bool = False):
         subj = (t.get("subject") or "").lower()
         spam_scan = subj + " " + description.lower() + " " + last_msg.lower()
         att_names = [a.get("name") or "" for a in (data.get("attachments") or []) if isinstance(a, dict)]
-        # BCC spam: mass-mail blasts are addressed To a third party with support
-        # only in BCC — real customers write TO a support inbox (#345005 was
-        # "To: jenniferkinzler.it@outlook.com" with support blind-copied).
-        SUPPORT_DOMAINS = ("viewlift", "fox.com", "spacecityhn", "monumentalsports",
-                           "livgolf", "dirtvision", "altitude", "freshdesk")
-        recipients = [str(e).lower() for e in (
-            (data.get("to_emails") or t.get("to_emails") or []) + (data.get("cc_emails") or [])
-        )]
-        bcc_spam = bool(recipients) and not any(d in r_ for r_ in recipients for d in SUPPORT_DOMAINS)
         has_agent_reply = any(
             not c.get("incoming") and not c.get("private")
             for c in (convs if isinstance(convs, list) else [])
         )
-        # Keyword/phishing heuristics only apply to first-contact tickets: a
-        # thread where an agent already replied is a real conversation (#340604
-        # was falsely flagged while 8 messages deep). Freshdesk's own
-        # type-based classification is always trusted.
-        _req = data.get("requester") or {} if isinstance(data, dict) else {}
-        security_phish = any(k in spam_scan for k in SECURITY_PHISHING_KW)
-        name_spoof = _looks_like_display_name_spoof(_req.get("name"), _req.get("email"))
-        heuristic_spam = (
-            any(k in spam_scan for k in SPAM_SUBJECT_KW)
-            or bcc_spam
-            or security_phish
-            or name_spoof
-            or _looks_like_phishing(t.get("subject", ""), description + " " + last_msg, att_names, has_agent_reply)
+        # Merge search-result to_emails into the full ticket data for the verdict.
+        if not data.get("to_emails") and t.get("to_emails"):
+            data["to_emails"] = t.get("to_emails")
+        spam, _spam_reason = _spam_verdict(
+            data, t.get("subject", ""), description, last_msg,
+            attachment_names=att_names, has_agent_reply=has_agent_reply,
         )
-        # data.get("spam") is Freshdesk's own boolean set by "Mark as spam" —
-        # always authoritative (the type check alone missed it, see #344916).
-        spam = bool(data.get("spam")) or bool(data.get("deleted")) \
-            or ("spam" in ttype) or ("auto reply" in ttype) or ("auto-reply" in ttype) \
-            or (heuristic_spam and not has_agent_reply)
 
         hrs = round((now - last_cust_dt).total_seconds() / 3600, 1)
         return {
