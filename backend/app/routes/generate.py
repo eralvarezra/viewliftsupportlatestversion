@@ -670,6 +670,22 @@ async def generate(
                 canned_block += f"\n[{title}]\n{content}\n"
             faq_context = (canned_block + "\n\n" + faq_context).strip()
 
+    # Monumental Sports "Season Ticket Membership" policy (client instruction).
+    _MSN_PLATFORM_ID = 4
+    _season_kw = re.compile(r"season\s*ticket|m\+\s*season|season\s*membership|ticket\s*holder", re.IGNORECASE)
+    if request.platform_id == _MSN_PLATFORM_ID and _season_kw.search(request.message or ""):
+        season_block = (
+            "MONUMENTAL SEASON TICKET MEMBERSHIP (apply when the customer is a season ticket "
+            "holder asking about their M+ access):\n"
+            "- These members get M+ access bundled with their season ticket membership; access is "
+            "provisioned by the client from a list — support cannot manually add them.\n"
+            "- Reassure the member their access is being set up and, if it is not yet active, that the "
+            "client is verifying the membership list. Do NOT tell them to subscribe or pay.\n"
+            "- The reply is being CC'd to appsupport@monumentalsports.com so the client can verify.\n"
+            "- For escalations regarding season ticket membership, the internal contact is Rajnish Kumar."
+        )
+        faq_context = (season_block + "\n\n" + faq_context).strip()
+
     # Learned examples from rated past interactions (feedback loop)
     learned_block, learned_used = _learned_examples_block(db, embedding_service, query_embedding, request.platform_id)
     if learned_block:

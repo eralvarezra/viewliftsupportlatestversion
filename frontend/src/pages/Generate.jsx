@@ -142,6 +142,7 @@ export default function Generate() {
   const [isSending, setIsSending] = useState(false)
   const [markingSpam, setMarkingSpam] = useState(false)
   const [spamMarked, setSpamMarked] = useState(false)
+  const [seasonTicketCc, setSeasonTicketCc] = useState(false)
   const [isEditingResponse, setIsEditingResponse] = useState(false)
   const responseEditRef = useRef(null)
   const previewEditRef = useRef(null)
@@ -480,6 +481,7 @@ export default function Generate() {
     try {
       const r = await client.get(`/freshdesk/ticket/${id}`)
       setFdTicket(r.data)
+      setSeasonTicketCc(!!r.data.season_ticket_holder)
       const loadedMessage = r.data.full_thread || r.data.description
       setCustomerMessage(loadedMessage)
       // Resolve platform — priority: cf_b2b_client_name > group_id > tags
@@ -702,6 +704,10 @@ export default function Generate() {
         body: replyBody,
         update_summary: updateSummary,
         problem_summary: parsedInfo?.problem_summary || null,
+        ...(seasonTicketCc ? {
+          cc_emails: ['appsupport@monumentalsports.com'],
+          tags: ['MSN-Issue-SeasonTicketHolder'],
+        } : {}),
         ...(coverUserId ? { cover_user_id: coverUserId } : {}),
       })
       const summaryStatus = replyRes.data?.summary
@@ -1262,6 +1268,19 @@ export default function Generate() {
                       <span className="px-1.5 py-0.5 rounded bg-blue-100 dark:bg-blue-800 text-blue-700 dark:text-blue-300">{fdTicket.status}</span>
                     </div>
                     {fdTicket.requester_name && <p className="text-gray-500 dark:text-gray-400">From: {fdTicket.requester_name} {fdTicket.requester_email ? `(${fdTicket.requester_email})` : ''}</p>}
+                    {fdTicket.season_ticket_holder && (
+                      <label className="flex items-start gap-2 mt-1 p-2 rounded-md bg-purple-50 dark:bg-purple-900/30 border border-purple-300 dark:border-purple-600 cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          checked={seasonTicketCc}
+                          onChange={(e) => setSeasonTicketCc(e.target.checked)}
+                          className="mt-0.5 rounded border-gray-300 dark:border-gray-600 text-purple-600 focus:ring-purple-400"
+                        />
+                        <span className="text-purple-800 dark:text-purple-300">
+                          🎟️ <span className="font-semibold">Season ticket holder</span> — CC <span className="font-mono">appsupport@monumentalsports.com</span> and tag <span className="font-mono">MSN-Issue-SeasonTicketHolder</span> when sending.
+                        </span>
+                      </label>
+                    )}
                     {fdTicket.spam_detected && (
                       <div className="flex items-start justify-between gap-2 mt-1 p-2 rounded-md bg-red-50 dark:bg-red-900/30 border border-red-300 dark:border-red-600">
                         <div className="min-w-0">

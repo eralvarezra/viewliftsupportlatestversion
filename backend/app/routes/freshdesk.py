@@ -319,6 +319,8 @@ async def get_freshdesk_ticket(
         "company": t.get("company", {}).get("name") if t.get("company") else None,
         "spam_detected": _is_spam,
         "spam_reason": _spam_reason,
+        "season_ticket_holder": _is_season_ticket_holder(
+            (t.get("subject", "") or "") + " " + _desc + " " + _last),
         "url": f"https://{settings.FRESHDESK_DOMAIN}/a/tickets/{t['id']}",
         "group_id": t.get("group_id"),
         "client_name": (t.get("custom_fields") or {}).get("cf_b2b_client_name"),
@@ -333,6 +335,20 @@ async def get_freshdesk_ticket(
 # replicate its exact effect via v2 instead — verified against a real execution:
 #   status -> Closed(5), type -> "Auto Reply Email / Spam",
 #   Client Name -> "Viewlift Internal", Platform/Support Plan -> "None", + note "Spam."
+# Monumental Sports "Season Ticket Membership" handling (from client instructions):
+# CC their support so they can verify, and tag the ticket so they can be tracked.
+MSN_PLATFORM_ID = 4
+MSN_SEASON_TICKET_CC = "appsupport@monumentalsports.com"
+MSN_SEASON_TICKET_TAG = "MSN-Issue-SeasonTicketHolder"
+_SEASON_TICKET_RE = re.compile(
+    r"season\s*ticket|m\+\s*season|season\s*membership|ticket\s*holder|"
+    r"season\s*ticket\s*member", re.IGNORECASE)
+
+
+def _is_season_ticket_holder(text: str) -> bool:
+    return bool(_SEASON_TICKET_RE.search(text or ""))
+
+
 SPAM_TICKET_FIELDS = {
     "status": 5,
     "type": "Auto Reply Email / Spam",
@@ -539,6 +555,9 @@ async def post_freshdesk_reply(
 
     if images:
         files = [("body", (None, body_html))]
+        for _e in (payload.get("cc_emails") or []):
+            if _e:
+                files.append(("cc_emails[]", (None, _e)))
         for i, img in enumerate(images):
             raw = b64lib.b64decode(img["base64"])
             mime = img.get("media_type", "image/png")
@@ -551,16 +570,33 @@ async def post_freshdesk_reply(
             timeout=30,
         )
     else:
+        _reply_payload = {"body": body_html}
+        _cc = [e for e in (payload.get("cc_emails") or []) if e]
+        if _cc:
+            _reply_payload["cc_emails"] = _cc
         r = requests.post(
             f"{FRESHDESK_BASE}/tickets/{ticket_id}/reply",
             auth=auth,
-            json={"body": body_html},
+            json=_reply_payload,
             timeout=10,
         )
     if r.status_code == 429:
         raise _rate_limit_error(r)
     if r.status_code not in (200, 201):
         raise HTTPException(status_code=502, detail=f"Freshdesk returned {r.status_code}: {r.text[:200]}")
+
+    # Apply requested tags (merge with existing — Freshdesk PUT replaces the set).
+    _new_tags = [tg for tg in (payload.get("tags") or []) if tg]
+    if _new_tags:
+        try:
+            _tr = requests.get(f"{FRESHDESK_BASE}/tickets/{ticket_id}", auth=auth, timeout=10)
+            _existing = _tr.json().get("tags", []) if _tr.status_code == 200 else []
+            _merged = list(dict.fromkeys([*_existing, *_new_tags]))
+            if set(_merged) != set(_existing):
+                requests.put(f"{FRESHDESK_BASE}/tickets/{ticket_id}",
+                             auth=auth, json={"tags": _merged}, timeout=10)
+        except Exception:
+            pass  # tagging is best-effort; never fail a sent reply
 
     # Optional bot-maintained ticket summary (agent toggle). Best-effort: a
     # summary failure never fails the reply that was already sent.
