@@ -195,7 +195,71 @@ function StatCard({ label, value, accent }) {
   )
 }
 
+function ExampleModal({ example, onClose }) {
+  if (!example) return null
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4" onClick={onClose}>
+      <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 dark:border-gray-700">
+          <div className="flex items-center gap-2">
+            <h3 className="text-lg font-semibold text-gray-800 dark:text-white">Learned example</h3>
+            <span className={`text-xs px-2 py-0.5 rounded-full ${example.corrected ? 'bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-300' : 'bg-green-50 dark:bg-green-900/30 text-green-600 dark:text-green-300'}`}>
+              {example.corrected ? 'developer correction' : '👍 rated good'}
+            </span>
+            {example.platform_name && <span className="text-xs text-gray-400">{example.platform_name}</span>}
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 text-xl leading-none">&times;</button>
+        </div>
+        {example.loading ? (
+          <p className="p-6 text-sm text-gray-400">Loading…</p>
+        ) : (
+          <div className="p-6 space-y-4 overflow-y-auto">
+            <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
+              <span className="font-semibold text-gray-700 dark:text-gray-200">{example.customer_name || 'Unknown customer'}</span>
+              {example.agent_username && <span>agent: {example.agent_username}</span>}
+              {example.created_at && <span>{new Date(example.created_at).toLocaleString()}</span>}
+            </div>
+            <div>
+              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1">Customer message (the context)</p>
+              <div className="text-sm text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-700/50 rounded-md p-3 whitespace-pre-wrap max-h-56 overflow-y-auto">
+                {example.customer_message}
+              </div>
+            </div>
+            <div>
+              <p className="text-xs font-semibold text-purple-500 dark:text-purple-400 uppercase tracking-wide mb-1">
+                What the bot learned to answer
+              </p>
+              <div className="text-sm text-gray-700 dark:text-gray-300 bg-purple-50 dark:bg-purple-900/20 border border-purple-100 dark:border-purple-900/40 rounded-md p-3 whitespace-pre-wrap max-h-64 overflow-y-auto">
+                {example.learned_response}
+              </div>
+            </div>
+            {example.corrected && example.original_response && (
+              <details className="text-sm">
+                <summary className="cursor-pointer text-xs text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">Show the original response that was corrected</summary>
+                <div className="mt-2 text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-700/50 rounded-md p-3 whitespace-pre-wrap max-h-48 overflow-y-auto line-through opacity-70">
+                  {example.original_response}
+                </div>
+              </details>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function LearningTab({ stats }) {
+  const [example, setExample] = useState(null)
+  const openExample = async (id) => {
+    setExample({ loading: true })
+    try {
+      const res = await client.get(`/history/example/${id}`)
+      setExample(res.data)
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Failed to load example')
+      setExample(null)
+    }
+  }
   if (!stats) return <p className="text-sm text-gray-400">Loading…</p>
   const { corpus, usage, top_examples } = stats
   const activeTotal = corpus.useful + corpus.corrected
@@ -247,18 +311,25 @@ function LearningTab({ stats }) {
         ) : (
           <div className="space-y-2">
             {top_examples.map((ex) => (
-              <div key={ex.id} className="flex items-center gap-3 text-sm">
+              <button
+                key={ex.id}
+                onClick={() => openExample(ex.id)}
+                className="w-full flex items-center gap-3 text-sm text-left rounded-md px-1 py-1 -mx-1 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
+                title="Click to see the ticket context this example was learned from"
+              >
                 <span className="flex-shrink-0 w-14 text-center px-2 py-0.5 rounded-full bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300 text-xs font-bold">{ex.uses}×</span>
                 <span className={`flex-shrink-0 text-xs px-2 py-0.5 rounded-full ${ex.corrected ? 'bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-300' : 'bg-green-50 dark:bg-green-900/30 text-green-600 dark:text-green-300'}`}>
                   {ex.corrected ? 'correction' : '👍'}
                 </span>
-                <span className="text-gray-700 dark:text-gray-300 truncate">{ex.problem}</span>
+                <span className="text-gray-700 dark:text-gray-300 truncate flex-1">{ex.problem}</span>
                 {ex.platform_name && <span className="text-xs text-gray-400 flex-shrink-0">{ex.platform_name}</span>}
-              </div>
+                <span className="text-gray-300 dark:text-gray-500 flex-shrink-0">›</span>
+              </button>
             ))}
           </div>
         )}
       </div>
+      <ExampleModal example={example} onClose={() => setExample(null)} />
     </div>
   )
 }

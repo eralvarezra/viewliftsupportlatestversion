@@ -218,6 +218,32 @@ async def get_recent_responses(
     return ReviewQueueResponse(count=len(items), items=items)
 
 
+@router.get("/example/{history_id}")
+async def get_learned_example(
+    history_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Full context of a learned example: the customer message and the response
+    the bot learned from (correction if any, else the rated-good response)."""
+    _require_superadmin(current_user)
+    e = db.query(ResponseHistory).filter(ResponseHistory.id == history_id).first()
+    if not e:
+        raise HTTPException(status_code=404, detail="Example not found")
+    corrected = e.review_status == "corrected" and bool(e.corrected_response)
+    return {
+        "id": e.id,
+        "customer_name": e.customer_name,
+        "customer_message": e.customer_message,
+        "learned_response": e.corrected_response if corrected else e.generated_response,
+        "corrected": corrected,
+        "original_response": e.generated_response if corrected else None,
+        "platform_name": e.platform.name if e.platform else None,
+        "agent_username": e.user.username if e.user else None,
+        "created_at": e.created_at,
+    }
+
+
 @router.get("/learning-stats")
 async def get_learning_stats(
     current_user: User = Depends(get_current_user),
