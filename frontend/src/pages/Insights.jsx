@@ -560,133 +560,120 @@ export default function DailyUpdate() {
     if (file) processFile(file)
   }, [processFile])
 
+  // Slack emoji shortcode per platform (rendered by Slack on paste as plain text).
+  const platformEmoji = (name) => {
+    const n = (name || '').toLowerCase()
+    if (n.includes('fox')) return ':fox_face:'
+    if (n.includes('altitude')) return ':snow_capped_mountain:'
+    if (n.includes('schn')) return ':tv:'
+    if (n.includes('monumental') || n.includes('msn')) return ':basketball:'
+    if (n.includes('liv')) return ':golf:'
+    if (n.includes('dirt')) return ':racing_car:'
+    if (n.includes('tbl') || n.includes('lightning')) return ':ice_hockey_stick_and_puck:'
+    if (n.includes('knight')) return ':crossed_swords:'
+    return ':small_blue_diamond:'
+  }
+  const DIVIDER = '━━━━━━━━━━━━━━━━━━━━'
+
+  // Trim to a max length at a word boundary.
+  const cut = (s, n) => (s && s.length > n ? s.slice(0, n).replace(/\s+\S*$/, '') + '…' : (s || ''))
+
   const copyForSlack = () => {
     const date = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })
+    const platOf = (g) => {
+      const p = (g.platforms || []).find(cl => cl && cl !== 'None' && cl.trim() !== '')
+      return p || 'Other'
+    }
+    // Group the high-trend groups + attach each platform's deep dive.
     const highGroups = (result.groups || []).filter(g => g.trend === 'high')
+    const byPlatform = {}
+    highGroups.forEach(g => {
+      const p = platOf(g)
+      if (p === 'Other') return
+      ;(byPlatform[p] = byPlatform[p] || []).push(g)
+    })
+    const dives = {}
+    ;(result.deep_dives || []).forEach(d => { if (d.platform) dives[d.platform] = d })
+    // Only platforms with real high-volume trends (3+ ticket groups). Platforms
+    // that only had a quiet-day deep dive (spam, single tickets) are noise here —
+    // their low-volume items surface under EMERGING SIGNALS instead.
+    const platforms = Object.keys(byPlatform).sort((a, b) =>
+      (byPlatform[b].reduce((s, g) => s + (g.ticket_ids?.length || 0), 0)) -
+      (byPlatform[a].reduce((s, g) => s + (g.ticket_ids?.length || 0), 0)))
+
+    const emerging = result.emerging || []
+    const priorities = result.tomorrow_priorities || []
     const trackerGroups = (result.groups || []).filter(g => g.tracker_ids && g.tracker_ids.length > 0)
 
-    // helper: group an array of groups by client
-    const byClient = (groups) => {
-      const map = {}
-      groups.forEach(g => {
-        const platforms = (g.platforms || []).filter(cl => cl && cl !== 'None' && cl.trim() !== '')
-        const effectivePlatforms = platforms.length ? platforms : ['Other']
-        effectivePlatforms.forEach(p => {
-          if (!map[p]) map[p] = []
-          map[p].push(g)
+    // Build the message. `full` includes deep-dive assessments; when the result
+    // is too long for Slack (>4000), we rebuild with assessments dropped.
+    const build = (withAssessments, sumMax) => {
+      const L = []
+      L.push(':bar_chart: DAILY TICKET UPDATE')
+      L.push(':date: ' + date)
+      L.push(':ticket: ' + result.total_tickets + ' tickets analyzed across ' + (result.groups?.length || 0) + ' main groups')
+      L.push('', DIVIDER, '', ':pushpin: OVERVIEW', '')
+      L.push(cut(result.analyst_summary || 'No significant trends today.', sumMax))
+      L.push('', DIVIDER, '', ':red_circle: KEY TRENDS & FINDINGS')
+      platforms.forEach(p => {
+        L.push('', platformEmoji(p) + ' *' + p + '*', '')
+        ;(byPlatform[p] || []).forEach(g => {
+          L.push('• ' + (g.ticket_ids?.length || 0) + ' ' + (g.title || '').replace(/^./, ch => ch.toLowerCase()))
         })
+        const d = dives[p]
+        if (withAssessments && d?.assessment) { L.push(''); L.push(cut(d.assessment, 320)) }
+        if (d?.recommendation) { L.push(''); L.push(':arrow_right: Recommended focus: ' + cut(d.recommendation, 220)) }
       })
-      return map
-    }
-
-    let msg = '*Daily Update — ' + date + '*\n'
-    msg += result.total_tickets + ' tickets analyzed • ' + (result.groups?.length || 0) + ' groups found\n'
-    if (result.analyst_summary) {
-      msg += '\n*📋 Analyst Summary*\n' + result.analyst_summary + '\n'
-    }
-    msg += '\n'
-
-    msg += '*🔴 High Trend Issues*\n'
-    const highGrouped = byClient(highGroups)
-    // Add known clients with no trends
-    KNOWN_CLIENTS.forEach(kc => {
-      const already = Object.keys(highGrouped).some(k => k.toLowerCase().includes(kc.split(' ')[0].toLowerCase()))
-      if (!already) highGrouped[kc] = []
-    })
-    Object.entries(highGrouped).sort(([a], [b]) => {
-      const ai = KNOWN_CLIENTS.findIndex(k => a.toLowerCase().includes(k.split(' ')[0].toLowerCase()))
-      const bi = KNOWN_CLIENTS.findIndex(k => b.toLowerCase().includes(k.split(' ')[0].toLowerCase()))
-      return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi)
-    }).forEach(([cl, groups]) => {
-      if (cl === 'Other') return
-      msg += '\n*' + cl + '*\n'
-      if (groups.length === 0) {
-        msg += '  _No 3+ ticket trends today — see deep dive below_\n'
-      } else {
-        groups.forEach(g => {
-          msg += '  • *' + g.title + '* — ' + (g.ticket_ids?.length || 0) + ' tickets'
-          if (g.devices?.length) msg += ' | ' + g.devices.join(', ')
-          msg += '\n'
-          if (g.description) msg += '    _' + g.description + '_\n'
+      if (emerging.length > 0) {
+        L.push('', DIVIDER, '', ':large_yellow_circle: EMERGING SIGNALS', '')
+        emerging.slice(0, 6).forEach(g => {
+          const plat = (g.platforms || []).find(x => x && x !== 'None') || ''
+          L.push('• ' + (plat ? plat + ': ' : '') + cut(g.description || g.title || '', 150))
         })
       }
-    })
-
-    const emergingGroups = result.emerging || []
-    if (emergingGroups.length > 0) {
-      msg += '\n*🟡 Emerging Signals (1-2 tickets — watch list)*\n'
-      emergingGroups.forEach(g => {
-        const plat = (g.platforms || [])[0] || ''
-        msg += '  • *' + g.title + '*' + (plat ? ' (' + plat + ')' : '') + ' — ' + (g.ticket_ids?.length || 0) + ' ticket(s)\n'
-        if (g.description) msg += '    _' + g.description + '_\n'
-      })
-    }
-
-    const deepDives = result.deep_dives || []
-    if (deepDives.length > 0) {
-      msg += '\n*🔎 Deep Dive & Recommendations*\n'
-      deepDives.forEach(d => {
-        msg += '\n*' + d.platform + '*\n'
-        if (d.assessment) msg += d.assessment + '\n'
-        if (d.recommendation) msg += '👉 _' + d.recommendation + '_\n'
-      })
-    }
-
-    msg += '\n*🔗 Tracker-Linked Groups*\n'
-    if (trackerGroups.length === 0) {
-      msg += '_No trackers_\n'
-    } else {
-      const grouped = byClient(trackerGroups)
-      Object.entries(grouped).forEach(([platform, groups]) => {
-        msg += '\n*' + platform + '*\n'
-        if (platform === 'Other') return
-        groups.forEach(g => {
-          const trackerInfo = g.tracker_ids.map(tid => {
+      if (priorities.length > 0) {
+        L.push('', DIVIDER, '', ':eyes: TOMORROW’S PRIORITIES', '')
+        priorities.slice(0, 5).forEach(p => L.push('• ' + cut(p, 150)))
+      }
+      L.push('')
+      if (trackerGroups.length === 0) {
+        L.push(':link: Tracker-linked groups: None identified today')
+      } else {
+        L.push(':link: Tracker-linked groups:')
+        trackerGroups.forEach(g => {
+          const info = g.tracker_ids.map(tid => {
             const td = result.tracker_details?.[tid]
-            return td ? 'Tracker #' + tid + ': ' + td.subject + ' (' + td.status + ')' : 'Tracker #' + tid
+            return td ? '#' + tid + ' ' + td.subject + ' (' + td.status + ')' : '#' + tid
           }).join(', ')
-          msg += '  • *' + g.title + '* — ' + (g.ticket_ids?.length || 0) + ' tickets → ' + trackerInfo + '\n'
-          if (g.devices?.length) msg += '    Devices: ' + g.devices.join(', ') + '\n'
+          L.push('• ' + g.title + ' → ' + info)
         })
-      })
+      }
+      return L.join('\n')
     }
 
-    const toHtml = (text) => {
-      return '<div style="font-family:sans-serif;font-size:14px;line-height:1.5">'
-        + text
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/\*((?:[^*])+)\*/g, '<b>$1</b>')
-            .replace(/_((?:[^_])+)_/g, '<i>$1</i>')
-            .replace(/\n/g, '<br>')
-        + '</div>'
-    }
-    const htmlMsg = toHtml(msg)
-    // Use DOM selection copy — most reliable cross-browser rich text method
-    const richEl = document.createElement('div')
-    richEl.innerHTML = htmlMsg
-    richEl.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0.01'
-    document.body.appendChild(richEl)
-    try {
-      const range = document.createRange()
-      range.selectNodeContents(richEl)
-      const sel = window.getSelection()
-      sel.removeAllRanges()
-      sel.addRange(range)
-      document.execCommand('copy')
-      sel.removeAllRanges()
+    let msg = build(true, 600)
+    if (msg.length > 3900) msg = build(true, 350)     // shorter overview first
+    if (msg.length > 3900) msg = build(false, 350)    // then drop assessments
+    if (msg.length > 3900) msg = msg.slice(0, 3900).replace(/\s+\S*$/, '') + '…'  // hard cap
+    // Plain-text copy so Slack converts the :emoji: shortcodes on paste.
+    navigator.clipboard.writeText(msg).then(() => {
       setSlackCopied(true)
       setTimeout(() => setSlackCopied(false), 2000)
-    } catch {
-      // Fallback to plain text
-      navigator.clipboard.writeText(msg).then(() => {
+    }).catch(() => {
+      try {
+        const ta = document.createElement('textarea')
+        ta.value = msg
+        ta.style.cssText = 'position:fixed;left:-9999px;top:0'
+        document.body.appendChild(ta)
+        ta.select()
+        document.execCommand('copy')
+        document.body.removeChild(ta)
         setSlackCopied(true)
         setTimeout(() => setSlackCopied(false), 2000)
-      }).catch(() => toast.error('Could not copy'))
-    } finally {
-      document.body.removeChild(richEl)
-    }
+      } catch {
+        toast.error('Could not copy')
+      }
+    })
   }
 
   return (

@@ -383,7 +383,8 @@ ANALYSIS SECTIONS (this is what leadership reads — never leave them shallow):
   * platform: the Platform value
   * assessment: 3-5 sentences of real analysis — what is happening on this platform today, the most likely root cause(s), and whether it is new, recurring, or escalating compared with the RECENT DAILY REPORTS above. If the pattern suggests something larger is going on (product bug, billing flow problem, store/platform change), say so explicitly. If today is quiet, analyze WHY it might be quiet and what the recent-days pattern shows.
   * recommendation: 1-2 concrete next actions for the support/product team
-- "analyst_summary": 3-4 sentences for leadership: overall state of the day, the single biggest risk, and what to watch tomorrow. On low-volume days go DEEPER (use the recent-days context), never shorter.
+- "analyst_summary": 2-3 sentences for leadership: overall state of the day and the single biggest risk. Keep it tight.
+- "tomorrow_priorities": a list of 3-5 short forward-looking items (one line each, no platform prefix needed if obvious) that the team should watch or follow up on tomorrow, derived from today's trends and the recent-days context.
 
 STRICT RULES:
 - Every ticket_id in a group must have the same Platform value — verify before outputting
@@ -427,7 +428,8 @@ Return ONLY valid JSON, no markdown, no explanation:
       "recommendation": "..."
     }}
   ],
-  "analyst_summary": "..."
+  "analyst_summary": "...",
+  "tomorrow_priorities": ["...", "..."]
 }}"""
 
         response = self.client.messages.create(
@@ -481,6 +483,7 @@ Return ONLY valid JSON, no markdown, no explanation:
             data.setdefault("emerging", [])
             data.setdefault("deep_dives", [])
             data.setdefault("analyst_summary", "")
+            data.setdefault("tomorrow_priorities", [])
             return data, tokens
         except (json.JSONDecodeError, ValueError) as exc:
             raise RuntimeError(f"analyze_daily_update: failed to parse Claude response: {exc}") from exc
