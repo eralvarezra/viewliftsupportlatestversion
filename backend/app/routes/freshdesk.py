@@ -58,6 +58,41 @@ _PHISHY_ATTACHMENT_RE = re.compile(
 )
 
 
+# Credential/security phishing (distinct from payment phishing above): fake
+# "verify your account / update your firewall" lures aimed at the support inbox
+# (#345271: "Email security alert ... update your firewall ... account at risk").
+SECURITY_PHISHING_KW = [
+    "email security alert", "security alert", "update your firewall",
+    "email firewall", "update my email settings", "verify your account",
+    "account verification", "click the button below", "confirm your account",
+    "your account will be", "account will be suspended", "account has been suspended",
+    "unusual activity", "suspicious activity", "validate your account",
+    "reactivate your account", "your password will expire", "quarantined messages",
+    "pending messages", "mailbox is full", "storage is full", "re-authenticate",
+    "failed to update your", "at risk of being", "permanent hijacking", "hijacking of your",
+]
+
+# Brand tokens a spammer puts in the display name to look official. If the
+# sender's display name contains one but the email domain is NOT ours, it's spoofed.
+BRAND_TOKENS = [
+    "monumental", "schn", "space city", "spacecity", "dirtvision", "altitude",
+    "livgolf", "liv golf", "fox one", "foxone", "viewlift", "support team",
+    "account verification", "email security", "it support", "help desk",
+]
+
+
+def _looks_like_display_name_spoof(requester_name: str, requester_email: str) -> bool:
+    """Display name impersonates a brand/support while the sender domain is not ours."""
+    name = (requester_name or "").lower()
+    domain = (requester_email or "").split("@")[-1].lower()
+    if not name or not domain:
+        return False
+    if any(d in domain for d in ("viewlift", "monumentalsports", "spacecityhn",
+                                 "dirtvision", "altitude", "livgolf", "fox.com", "freshdesk")):
+        return False  # a real internal/support sender
+    return any(tok in name for tok in BRAND_TOKENS)
+
+
 def _looks_like_phishing(subject: str, text: str, attachment_names: list, has_agent_reply: bool) -> bool:
     """True if the ticket matches payment/BEC phishing patterns.
 
@@ -845,9 +880,14 @@ def _scan_eligible_pool(max_age_hours: int = 5, force: bool = False):
         # thread where an agent already replied is a real conversation (#340604
         # was falsely flagged while 8 messages deep). Freshdesk's own
         # type-based classification is always trusted.
+        _req = data.get("requester") or {} if isinstance(data, dict) else {}
+        security_phish = any(k in spam_scan for k in SECURITY_PHISHING_KW)
+        name_spoof = _looks_like_display_name_spoof(_req.get("name"), _req.get("email"))
         heuristic_spam = (
             any(k in spam_scan for k in SPAM_SUBJECT_KW)
             or bcc_spam
+            or security_phish
+            or name_spoof
             or _looks_like_phishing(t.get("subject", ""), description + " " + last_msg, att_names, has_agent_reply)
         )
         # data.get("spam") is Freshdesk's own boolean set by "Mark as spam" —
