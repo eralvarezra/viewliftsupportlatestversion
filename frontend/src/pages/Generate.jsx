@@ -375,6 +375,7 @@ export default function Generate() {
 
   const QUEUE_PLATFORMS = ['SCHN+', 'Altitude Sports', 'DirtVision', 'Monumental Sports']
   const refreshQueues = async () => {
+    setQueuesOpen(true)
     setQueuesLoading(true)
     try {
       const res = await client.get('/freshdesk/automated-queue', { params: { max_age_hours: 12 } })
@@ -1934,28 +1935,28 @@ end_of_access: 2026-05-18`}
         <div className="space-y-6 min-w-0">
           {/* Live Queues panel */}
           <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md overflow-hidden">
-            <button
-              onClick={toggleQueues}
-              className="w-full flex items-center justify-between px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
-            >
-              <span className="flex items-center gap-2 text-sm font-semibold text-gray-800 dark:text-white">
+            <div className="w-full flex items-center justify-between px-4 py-3">
+              <button
+                onClick={toggleQueues}
+                className="flex items-center gap-2 text-sm font-semibold text-gray-800 dark:text-white"
+              >
+                <span className="text-gray-400">{queuesOpen ? '▲' : '▼'}</span>
                 📥 Queues
                 {queues && (
                   <span className="text-xs font-normal text-gray-400">
                     {Object.values(queues).reduce((s, l) => s + l.length, 0)} waiting
                   </span>
                 )}
-              </span>
-              <span className="flex items-center gap-2">
-                {queuesOpen && (
-                  <span
-                    onClick={(e) => { e.stopPropagation(); refreshQueues() }}
-                    className="text-xs text-blue-600 dark:text-blue-400 hover:underline"
-                  >↺ Refresh</span>
-                )}
-                <span className="text-gray-400">{queuesOpen ? '▲' : '▼'}</span>
-              </span>
-            </button>
+              </button>
+              <button
+                onClick={refreshQueues}
+                disabled={queuesLoading}
+                className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/30 hover:bg-blue-100 dark:hover:bg-blue-900/50 rounded-md transition-colors disabled:opacity-50"
+                title="Refresh the queues"
+              >
+                <span className={queuesLoading ? 'inline-block animate-spin' : ''}>↺</span> Refresh
+              </button>
+            </div>
             {queuesOpen && (
               <div className="border-t border-gray-100 dark:border-gray-700 p-2 space-y-1">
                 {queuesLoading && !queues ? (
