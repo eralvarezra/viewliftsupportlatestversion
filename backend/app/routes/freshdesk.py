@@ -108,6 +108,10 @@ SPAM_SUBJECT_KW = [
     "rank your website", "lead generation service",
     "strengthen their visibility", "we're helping businesses",
     "brief introduction with more information", "visibility where customers search",
+    # B2B factory/wholesale solicitations (#345278 gym-equipment supplier)
+    "direct manufacturer", "factory supply", "we specialize in", "specializing in",
+    "ddp shipping", "delivered duty paid", "wholesale supplier", "bulk order",
+    "we now offer", "reaching out from",
 ]
 
 

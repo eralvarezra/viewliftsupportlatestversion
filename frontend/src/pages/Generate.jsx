@@ -70,6 +70,20 @@ function isTveAccount(cms) {
   const plan = (cms.plan || '').toLowerCase().trim()
   return handler === 'TVE' || plan.startsWith('tve')
 }
+// The LLM's own verdict is a strong spam signal that keyword heuristics miss.
+// If the generated bot notes / response say it's spam or needs no reply, offer
+// the Mark-as-Spam action even when load-time detection didn't flag it.
+const BOT_SPAM_PHRASES = [
+  'marked as spam', 'mark as spam', 'mark it as spam', 'spam/solicitation',
+  'spam or solicitation', 'is a spam', 'is spam', 'solicitation email',
+  'not a legitimate support', 'not a legitimate customer', 'no response is warranted',
+  'no customer-facing response', 'no reply is needed', 'should be closed and marked',
+  'no response is required', 'phishing', 'this is spam',
+]
+function botOutputSaysSpam(notes, response) {
+  const t = ((notes || '') + ' ' + (response || '')).toLowerCase()
+  return BOT_SPAM_PHRASES.some(p => t.includes(p))
+}
 function isSupportEmail(email) {
   if (!email) return false
   const domain = (email.split('@')[1] || '').toLowerCase()
@@ -1862,6 +1876,23 @@ end_of_access: 2026-05-18`}
                 </span>
               </div>
               <pre className="text-sm text-gray-700 dark:text-gray-300 whitespace-pre-wrap font-sans leading-relaxed">{botNotes}</pre>
+              {fdTicket?.id && botOutputSaysSpam(botNotes, generatedResponse) && (
+                <div className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-600 flex items-center justify-between gap-2">
+                  <span className="text-xs text-red-700 dark:text-red-400">🚫 The bot flagged this as spam — no reply needed.</span>
+                  {(spamMarked || spamMarkedIds.includes(fdTicket.id)) ? (
+                    <span className="shrink-0 px-3 py-1.5 rounded-md bg-red-100 dark:bg-red-800/50 text-red-700 dark:text-red-300 text-xs font-semibold whitespace-nowrap">✓ Marked spam</span>
+                  ) : (
+                    <button
+                      onClick={() => markTicketSpam(fdTicket.id)}
+                      disabled={markingSpam}
+                      className="shrink-0 px-3 py-1.5 bg-red-600 hover:bg-red-700 disabled:bg-red-400 text-white text-xs font-semibold rounded-md transition-colors whitespace-nowrap"
+                      title="Runs the Freshdesk SPAM scenario on this ticket"
+                    >
+                      {markingSpam ? 'Running…' : '🚫 Mark as Spam'}
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
