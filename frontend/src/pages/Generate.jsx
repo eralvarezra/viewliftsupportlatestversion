@@ -330,18 +330,28 @@ export default function Generate() {
     }
   }
 
-  const handleMarkSpam = async () => {
-    if (!fdTicket?.id) return
+  const [spamMarkedIds, setSpamMarkedIds] = useState([])
+  const markTicketSpam = async (ticketId) => {
+    if (!ticketId) return
     setMarkingSpam(true)
     try {
-      await client.post(`/freshdesk/ticket/${fdTicket.id}/mark-spam`)
-      setSpamMarked(true)
+      await client.post(`/freshdesk/ticket/${ticketId}/mark-spam`)
+      setSpamMarkedIds(prev => [...prev, ticketId])
+      if (fdTicket?.id === ticketId) setSpamMarked(true)
       toast.success('Ran the SPAM scenario in Freshdesk')
     } catch (err) {
       toast.error(apiErr(err, 'Failed to run the SPAM scenario'))
     } finally {
       setMarkingSpam(false)
     }
+  }
+  const handleMarkSpam = () => markTicketSpam(fdTicket?.id)
+
+  // Load a flagged ticket into the manual Freshdesk Ticket flow.
+  const loadFlaggedTicket = (url) => {
+    setInputMode('freshdesk')
+    setFdInput(url)
+    loadFdTicket(url)
   }
 
   const rateResponse = async (value) => {
@@ -1177,10 +1187,41 @@ export default function Generate() {
                           <div className="space-y-0.5 pt-1 border-t border-gray-200 dark:border-gray-600">
                             <p className="text-[10px] font-semibold text-amber-600 dark:text-amber-400 uppercase tracking-wide">Manual review ({autoStatus.flagged.length})</p>
                             {autoStatus.flagged.slice(0, 6).map(f => (
-                              <a key={f.id} href={f.url} target="_blank" rel="noreferrer"
-                                className="block text-[11px] text-amber-600 dark:text-amber-400 hover:underline truncate">
-                                #{f.id} · {f.reason} · {f.subject}
-                              </a>
+                              <div key={f.id} className="text-[11px] py-0.5">
+                                <p className="text-amber-600 dark:text-amber-400 truncate">
+                                  #{f.id} · {f.reason} · {f.subject}
+                                </p>
+                                <div className="flex items-center gap-2 mt-0.5">
+                                  <button
+                                    onClick={() => loadFlaggedTicket(f.url)}
+                                    className="text-blue-600 dark:text-blue-400 hover:underline"
+                                  >
+                                    Load ticket
+                                  </button>
+                                  <span className="text-gray-300 dark:text-gray-600">·</span>
+                                  <a href={f.url} target="_blank" rel="noreferrer"
+                                    className="text-gray-500 dark:text-gray-400 hover:underline">
+                                    Open in Freshdesk ↗
+                                  </a>
+                                  {f.reason === 'spam' && (
+                                    <>
+                                      <span className="text-gray-300 dark:text-gray-600">·</span>
+                                      {spamMarkedIds.includes(f.id) ? (
+                                        <span className="text-red-600 dark:text-red-400 font-semibold">✓ Marked spam</span>
+                                      ) : (
+                                        <button
+                                          onClick={() => markTicketSpam(f.id)}
+                                          disabled={markingSpam}
+                                          className="text-red-600 dark:text-red-400 font-semibold hover:underline disabled:opacity-50"
+                                          title="Run the Freshdesk SPAM scenario"
+                                        >
+                                          🚫 Mark as Spam
+                                        </button>
+                                      )}
+                                    </>
+                                  )}
+                                </div>
+                              </div>
                             ))}
                           </div>
                         )}
