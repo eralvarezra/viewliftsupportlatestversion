@@ -154,6 +154,10 @@ export default function Generate() {
   const [showPreview, setShowPreview] = useState(false)
   const [noteImages, setNoteImages] = useState([])
   const [isSending, setIsSending] = useState(false)
+  const [queues, setQueues] = useState(null)
+  const [queuesLoading, setQueuesLoading] = useState(false)
+  const [queuesOpen, setQueuesOpen] = useState(false)
+  const [openQueuePlatforms, setOpenQueuePlatforms] = useState({})
   const [markingSpam, setMarkingSpam] = useState(false)
   const [spamMarked, setSpamMarked] = useState(false)
   const [seasonTicketCc, setSeasonTicketCc] = useState(false)
@@ -367,6 +371,34 @@ export default function Generate() {
     setInputMode('freshdesk')
     setFdInput(url)
     loadFdTicket(url)
+  }
+
+  const QUEUE_PLATFORMS = ['SCHN+', 'Altitude Sports', 'DirtVision', 'Monumental Sports']
+  const refreshQueues = async () => {
+    setQueuesLoading(true)
+    try {
+      const res = await client.get('/freshdesk/automated-queue', { params: { max_age_hours: 12 } })
+      // group workable (non-spam) tickets by platform, longest-waiting first
+      const map = {}
+      QUEUE_PLATFORMS.forEach(p => { map[p] = [] })
+      ;(res.data.tickets || []).forEach(t => {
+        if (t.spam_flag) return
+        const p = t.platform
+        if (!map[p]) map[p] = []
+        map[p].push(t)
+      })
+      Object.values(map).forEach(list => list.sort((a, b) => (b.hours_ago || 0) - (a.hours_ago || 0)))
+      setQueues(map)
+    } catch (err) {
+      toast.error(apiErr(err, 'Failed to load queues'))
+    } finally {
+      setQueuesLoading(false)
+    }
+  }
+  const toggleQueues = () => {
+    const next = !queuesOpen
+    setQueuesOpen(next)
+    if (next && !queues) refreshQueues()
   }
 
   const rateResponse = async (value) => {
@@ -1900,6 +1932,82 @@ end_of_access: 2026-05-18`}
 
         {/* Right Panel - Parsed & Sources */}
         <div className="space-y-6 min-w-0">
+          {/* Live Queues panel */}
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md overflow-hidden">
+            <button
+              onClick={toggleQueues}
+              className="w-full flex items-center justify-between px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
+            >
+              <span className="flex items-center gap-2 text-sm font-semibold text-gray-800 dark:text-white">
+                📥 Queues
+                {queues && (
+                  <span className="text-xs font-normal text-gray-400">
+                    {Object.values(queues).reduce((s, l) => s + l.length, 0)} waiting
+                  </span>
+                )}
+              </span>
+              <span className="flex items-center gap-2">
+                {queuesOpen && (
+                  <span
+                    onClick={(e) => { e.stopPropagation(); refreshQueues() }}
+                    className="text-xs text-blue-600 dark:text-blue-400 hover:underline"
+                  >↺ Refresh</span>
+                )}
+                <span className="text-gray-400">{queuesOpen ? '▲' : '▼'}</span>
+              </span>
+            </button>
+            {queuesOpen && (
+              <div className="border-t border-gray-100 dark:border-gray-700 p-2 space-y-1">
+                {queuesLoading && !queues ? (
+                  <p className="text-xs text-gray-400 text-center py-4">Loading queues…</p>
+                ) : (
+                  QUEUE_PLATFORMS.map(p => {
+                    const list = (queues && queues[p]) || []
+                    const isOpen = openQueuePlatforms[p]
+                    return (
+                      <div key={p} className="rounded-md bg-gray-50 dark:bg-gray-700/40">
+                        <button
+                          onClick={() => setOpenQueuePlatforms(o => ({ ...o, [p]: !o[p] }))}
+                          className="w-full flex items-center justify-between px-3 py-2 text-xs"
+                        >
+                          <span className="font-medium text-gray-700 dark:text-gray-200">{p}</span>
+                          <span className="flex items-center gap-2">
+                            <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-bold ${list.length > 0 ? 'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300' : 'bg-gray-200 dark:bg-gray-600 text-gray-500 dark:text-gray-400'}`}>{list.length}</span>
+                            <span className="text-gray-400">{isOpen ? '▲' : '▼'}</span>
+                          </span>
+                        </button>
+                        {isOpen && (
+                          <div className="px-2 pb-2 space-y-1">
+                            {list.length === 0 ? (
+                              <p className="text-[11px] text-gray-400 px-1 py-1">No tickets waiting</p>
+                            ) : list.map(t => (
+                              <div key={t.id} className="flex items-center gap-2 p-2 rounded-md bg-white dark:bg-gray-800">
+                                <div className="min-w-0 flex-1">
+                                  <p className="text-xs font-medium text-gray-800 dark:text-gray-200 truncate">#{t.id} {t.subject}</p>
+                                  <p className="text-[11px] text-gray-400">
+                                    <span className={t.hours_ago >= 4 ? 'text-red-500 font-semibold' : t.hours_ago >= 2 ? 'text-amber-500' : ''}>
+                                      {t.hours_ago != null ? `${t.hours_ago}h waiting` : ''}
+                                    </span>
+                                    {t.refund_flag && <span className="ml-1 text-amber-600 dark:text-amber-400">· refund</span>}
+                                  </p>
+                                </div>
+                                <button
+                                  onClick={() => loadFlaggedTicket(t.url)}
+                                  className="shrink-0 px-2 py-1 text-[11px] font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-md transition-colors"
+                                >
+                                  Load
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })
+                )}
+              </div>
+            )}
+          </div>
           {/* Parsed Information */}
           <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-6">
             <h3 className="text-lg font-semibold text-gray-800 dark:text-white mb-4">Parsed Information</h3>
