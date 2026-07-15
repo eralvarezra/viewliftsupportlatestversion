@@ -1053,11 +1053,10 @@ async def get_automated_queue(max_age_hours: int = 5, current_user: User = Depen
 # with no time cutoff. Lightweight: uses Freshdesk search only (no per-ticket
 # conversation fetch), so it can list the full queue cheaply.
 _QUEUE_GROUPS = {
-    43000666076: "SCHN+",
-    43000663122: "Monumental Sports",
-    43000663120: "Monumental Sports",
-    43000662781: "DirtVision",
-    43000664192: "Altitude Sports",
+    43000666076: "SCHN+",          # SCHN Support
+    43000663122: "Monumental Sports",  # MSN Support (NOT 43000663120 = LNP Support)
+    43000662781: "DirtVision",     # DIRTVision Support
+    43000664192: "Altitude Sports",  # Altitude+ Support
 }
 # Actionable statuses only. Excludes terminal (Resolved=4, Closed=5) and the
 # customer-blocked ones: Waiting on Client(6) and Waiting on End User(12) — both
