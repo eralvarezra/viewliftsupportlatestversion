@@ -1978,10 +1978,15 @@ end_of_access: 2026-05-18`}
                               <div key={t.id} className="flex items-center gap-2 p-2 rounded-md bg-white dark:bg-gray-800">
                                 <div className="min-w-0 flex-1">
                                   <p className="text-xs font-medium text-gray-800 dark:text-gray-200 truncate">#{t.id} {t.subject}</p>
-                                  <p className="text-[11px] text-gray-400">
+                                  <p className="text-[11px] text-gray-400 flex flex-wrap items-center gap-1">
+                                    {t.waiting_on === 'us' ? (
+                                      <span className="px-1.5 py-0.5 rounded-full bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300 font-medium">Customer responded</span>
+                                    ) : (
+                                      <span className="px-1.5 py-0.5 rounded-full bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400">Agent responded</span>
+                                    )}
                                     <span className="px-1.5 py-0.5 rounded-full bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400">{t.status}</span>
-                                    <span className={`ml-1 ${t.hours_since_update >= 24 ? 'text-red-500 font-semibold' : t.hours_since_update >= 8 ? 'text-amber-500' : ''}`}>
-                                      {t.hours_since_update != null ? `${t.hours_since_update}h since last update` : ''}
+                                    <span className={t.hours_since_update >= 48 ? 'text-red-500 font-semibold' : t.hours_since_update >= 24 ? 'text-amber-500' : ''}>
+                                      {t.hours_since_update != null ? `${t.hours_since_update}h ago` : ''}
                                     </span>
                                   </p>
                                 </div>

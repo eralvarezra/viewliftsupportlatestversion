@@ -1092,39 +1092,38 @@ async def get_queues(current_user: User = Depends(get_current_user)):
             break
         return []
 
-    import html as _html
-    from datetime import timedelta
     from concurrent.futures import ThreadPoolExecutor
     now = datetime.now(timezone.utc)
-    cutoff = now - timedelta(hours=24)
-    since_date = (now - timedelta(days=2)).strftime("%Y-%m-%d")
     status_q = " OR ".join(f"status:{s}" for s in _QUEUE_STATUSES)
+    PER_PLATFORM_CAP = 50  # bound the per-ticket enrichment cost
 
-    # 1. Collect candidate tickets (24h activity window, non-terminal statuses).
-    candidates = {}  # id -> (ticket, label)
+    def _upd(t):
+        try:
+            return datetime.fromisoformat((t.get("updated_at") or "").replace("Z", "+00:00"))
+        except Exception:
+            return datetime.min.replace(tzinfo=timezone.utc)
+
+    # 1. All non-terminal (not resolved/closed) tickets per platform, no time
+    #    filter. Keep the most-recently-updated PER_PLATFORM_CAP to bound cost.
+    per_group = {}  # label -> list of tickets
     for gid, label in _QUEUE_GROUPS.items():
+        per_group.setdefault(label, [])
         page = 1
         while True:
-            results = _search(f"group_id:{gid} AND ({status_q}) AND updated_at:>'{since_date}'", page)
+            results = _search(f"group_id:{gid} AND ({status_q})", page)
             if not results:
                 break
-            for t in results:
-                if t["id"] in candidates:
-                    continue
-                updated = t.get("updated_at")
-                if updated:
-                    try:
-                        if datetime.fromisoformat(updated.replace("Z", "+00:00")) < cutoff:
-                            continue
-                    except Exception:
-                        pass
-                candidates[t["id"]] = (t, label)
+            per_group[label].extend(results)
             if len(results) < 30 or page >= 10:
                 break
             page += 1
+    candidates = []
+    for label, tickets in per_group.items():
+        uniq = {t["id"]: t for t in tickets}
+        top = sorted(uniq.values(), key=_upd, reverse=True)[:PER_PLATFORM_CAP]
+        candidates.extend((t, label) for t in top)
 
-    # 2. For each candidate, look at the thread: keep only tickets whose LAST
-    #    public message is from the CUSTOMER (incoming) — i.e. waiting on us.
+    # 2. Enrich each with who spoke last (customer vs agent) from the thread.
     def _analyze(item):
         t, label = item
         tid = t["id"]
@@ -1135,7 +1134,7 @@ async def get_queues(current_user: User = Depends(get_current_user)):
                 return None
             convs = cr.json() if cr.status_code == 200 else []
         except Exception:
-            return None
+            convs = []
         last_dt, last_incoming = None, None
         for c in convs if isinstance(convs, list) else []:
             if c.get("private"):
@@ -1151,20 +1150,14 @@ async def get_queues(current_user: User = Depends(get_current_user)):
                 last_dt, last_incoming = dt, bool(c.get("incoming"))
         # No public reply yet → the ticket creation IS the customer's message.
         if last_dt is None:
-            ts = t.get("created_at")
-            try:
-                last_dt = datetime.fromisoformat(ts.replace("Z", "+00:00")) if ts else None
-            except Exception:
-                last_dt = None
-            last_incoming = True
-        if not last_incoming or last_dt is None or last_dt < cutoff:
-            return None  # last word was the agent's, or older than 24h
-        hrs = round((now - last_dt).total_seconds() / 3600, 1)
+            last_dt, last_incoming = _upd(t), True
+        hrs = round((now - last_dt).total_seconds() / 3600, 1) if last_dt else None
         return label, {
             "id": tid,
             "subject": t.get("subject", ""),
             "status": _QUEUE_STATUS_LABELS.get(t.get("status"), str(t.get("status"))),
             "hours_since_update": hrs,
+            "waiting_on": "us" if last_incoming else "customer",
             "created_at": t.get("created_at"),
             "url": f"https://{settings.FRESHDESK_DOMAIN}/a/tickets/{tid}",
         }
@@ -1172,11 +1165,12 @@ async def get_queues(current_user: User = Depends(get_current_user)):
     by_platform = {label: [] for label in set(_QUEUE_GROUPS.values())}
     if candidates:
         with ThreadPoolExecutor(max_workers=12) as pool:
-            for res in pool.map(_analyze, list(candidates.values())):
+            for res in pool.map(_analyze, candidates):
                 if res:
                     by_platform[res[0]].append(res[1])
+    # Sort: tickets waiting on us first, then by longest wait.
     for lst in by_platform.values():
-        lst.sort(key=lambda x: (x["hours_since_update"] is None, -(x["hours_since_update"] or 0)))
+        lst.sort(key=lambda x: (x["waiting_on"] != "us", -(x["hours_since_update"] or 0)))
     payload = {"queues": by_platform, "rate_limited_seconds": _rate_limit_remaining()}
     _QUEUE_CACHE["data"] = payload
     _QUEUE_CACHE["ts"] = now_ts
