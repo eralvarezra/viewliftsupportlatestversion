@@ -955,7 +955,7 @@ export default function Generate() {
         return claimAndProcess()
       }
       setAutoStage('generating')
-      await runGenerate({
+      const genData = await runGenerate({
         message: loaded.message,
         platformId: loaded.platformId,
         cmsInfo: loaded.cmsInfo,
@@ -964,6 +964,15 @@ export default function Generate() {
         skipImages: true,
         automated: true,
       })
+      // Spam: no reply to draft — treat like a completed ticket. Mark it handled
+      // (so it's never re-served), clear, and move to the next ticket.
+      if (genData?.is_spam) {
+        try { await client.post('/freshdesk/automated/complete', { ticket_id: ticket.id }) } catch (_) {}
+        setAutoHandled(n => n + 1)
+        handleClear(true)
+        autoBusyRef.current = false
+        return claimAndProcess()
+      }
       setAutoStage('review')
     } finally {
       autoBusyRef.current = false

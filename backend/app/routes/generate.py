@@ -422,6 +422,7 @@ async def generate(
             faq_sources=[],
             canned_sources=[],
             history_id=None,
+            is_spam=True,
         )
 
     # Step 1b: Detect "issue resolved" messages → return B2C Last Response directly

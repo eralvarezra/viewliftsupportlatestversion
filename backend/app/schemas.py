@@ -138,6 +138,7 @@ class GenerateResponse(BaseModel):
     cache_hit: bool = False
     history_id: Optional[int] = None
     learned_count: int = 0
+    is_spam: bool = False
 
 
 # Platform schemas
