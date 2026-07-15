@@ -1059,10 +1059,11 @@ _QUEUE_GROUPS = {
     43000662781: "DirtVision",
     43000664192: "Altitude Sports",
 }
-# Non-terminal statuses (everything except Resolved=4 and Closed=5).
-_QUEUE_STATUSES = [2, 3, 6, 7, 12, 15]
+# Actionable statuses: exclude Resolved(4), Closed(5) AND Waiting on Customer(6)
+# — a "Waiting on Customer" ticket is blocked on the customer, not on us.
+_QUEUE_STATUSES = [2, 3, 7, 12, 15]
 _QUEUE_STATUS_LABELS = {
-    2: "Open", 3: "Pending", 6: "Waiting on Customer",
+    2: "Open", 3: "Pending",
     7: "Waiting on Third Party", 12: "Waiting on L1", 15: "Waiting on L1",
 }
 _QUEUE_CACHE = {"data": None, "ts": 0.0}
