@@ -1059,12 +1059,16 @@ _QUEUE_GROUPS = {
     43000662781: "DirtVision",
     43000664192: "Altitude Sports",
 }
-# Actionable statuses: exclude Resolved(4), Closed(5) AND Waiting on Customer(6)
-# — a "Waiting on Customer" ticket is blocked on the customer, not on us.
-_QUEUE_STATUSES = [2, 3, 7, 12, 15]
+# Actionable statuses only. Excludes terminal (Resolved=4, Closed=5) and the
+# customer-blocked ones: Waiting on Client(6) and Waiting on End User(12) — both
+# mean the ball is in the customer's court, not ours.
+_QUEUE_STATUSES = [2, 3, 7, 15]
+# Real Freshdesk status IDs for this account (from ticket_fields).
 _QUEUE_STATUS_LABELS = {
-    2: "Open", 3: "Pending",
-    7: "Waiting on Third Party", 12: "Waiting on L1", 15: "Waiting on L1",
+    2: "Open", 3: "Pending", 6: "Waiting on Client", 7: "Waiting on Third Party",
+    8: "Waiting on Development", 10: "Waiting on QA", 12: "Waiting on End User",
+    13: "Ready for Production", 14: "Waiting on Backend/Billing", 15: "Waiting on L1",
+    16: "Waiting on L2", 20: "HOLD", 24: "Waiting in Queue",
 }
 _QUEUE_CACHE = {"data": None, "ts": 0.0}
 
