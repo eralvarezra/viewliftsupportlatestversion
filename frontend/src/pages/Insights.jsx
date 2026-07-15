@@ -656,7 +656,10 @@ export default function DailyUpdate() {
     if (msg.length > 3900) msg = build(false, 350)    // then drop assessments
     if (msg.length > 3900) msg = msg.slice(0, 3900).replace(/\s+\S*$/, '') + '…'  // hard cap
     // Plain-text copy so Slack converts the :emoji: shortcodes on paste.
-    navigator.clipboard.writeText(msg).then(() => {
+    const _clipPromise = (navigator.clipboard && navigator.clipboard.writeText)
+      ? navigator.clipboard.writeText(msg)
+      : Promise.reject(new Error("no clipboard api"))
+    _clipPromise.then(() => {
       setSlackCopied(true)
       setTimeout(() => setSlackCopied(false), 2000)
     }).catch(() => {
