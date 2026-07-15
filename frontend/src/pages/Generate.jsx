@@ -268,6 +268,9 @@ export default function Generate() {
         checked_emails: checkedEmails.length > 0 ? checkedEmails : null,
         cms_not_found: cms !== null && !cms?.found && !cms?.token_error,
         cms_no_subscription: !!(cms?.found && !cms?.is_subscribed),
+        // Spam short-circuit only applies to Full Automated bulk runs; when an
+        // agent manually clicks Analyze & Generate, always produce a real reply.
+        automated: !!opts.automated,
       })
 
       setParsedInfo(response.data.parsed)
@@ -959,6 +962,7 @@ export default function Generate() {
         cmsAltEmails: loaded.cmsAltEmails,
         agentNotes: '',
         skipImages: true,
+        automated: true,
       })
       setAutoStage('review')
     } finally {

@@ -87,6 +87,7 @@ class GenerateRequest(BaseModel):
     cms_not_found: bool = False
     cms_no_subscription: bool = False
     checked_emails: Optional[List[str]] = None
+    automated: bool = False  # Full Automated bulk run — enables spam short-circuit
 
 
 class ParsedData(BaseModel):

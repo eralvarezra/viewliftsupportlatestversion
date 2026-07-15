@@ -406,9 +406,10 @@ async def generate(
         images=images_dicts,
     )
 
-    # Step 1a: Spam short-circuit. The cheap Haiku parse already read the whole
-    # message; if it flagged spam, skip the expensive Sonnet generation entirely.
-    if parsed_data.is_spam:
+    # Step 1a: Spam short-circuit — ONLY in Full Automated bulk runs. When an
+    # agent manually clicks Analyze & Generate they've chosen to work this ticket,
+    # so always produce a real reply (parser spam flags can false-positive).
+    if parsed_data.is_spam and request.automated:
         note = (
             "This message was flagged as spam/solicitation and is not a genuine support request"
             + (f" ({parsed_data.spam_reason})" if parsed_data.spam_reason else "")
