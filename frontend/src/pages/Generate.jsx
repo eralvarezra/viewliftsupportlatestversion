@@ -1403,7 +1403,7 @@ export default function Generate() {
                             }
                           </p>
                           <a
-                            href={`https://cms-gcp.viewlift.com/users/search/${cmsInfo.user_id || ''}`}
+                            href={cmsInfo.site === 'monumental' ? `https://cms.monumentalsportsnetwork.com/users/search/${cmsInfo.user_id || ''}` : `https://cms.viewlift.com/v5/customer-support/user/${cmsInfo.user_id || ''}`}
                             target="_blank"
                             rel="noopener noreferrer"
                             className="shrink-0 inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold bg-indigo-600 hover:bg-indigo-700 text-white rounded-md transition-colors"
