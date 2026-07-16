@@ -1429,10 +1429,12 @@ def automated_status(
     # tries to claim when there is work for THEM (empty = all platforms).
     _sel = [p for p in platforms.split(",") if p]
     remaining_for_me = [t for t in remaining if not _sel or t.get("platform") in _sel]
+    # Manual-review list also respects the agent's platform selection.
     flagged = [{
         "id": t["id"], "subject": t.get("subject", ""), "platform": t.get("platform", ""),
         "reason": "spam" if t.get("spam_flag") else "refund", "url": t.get("url", ""),
-    } for t in pool if t.get("spam_flag") or t.get("refund_flag")]
+    } for t in pool if (t.get("spam_flag") or t.get("refund_flag"))
+        and (not _sel or t.get("platform") in _sel)]
 
     sent_count = db.execute(_sql(
         "SELECT COUNT(*) FROM automated_claims WHERE status='sent'"
