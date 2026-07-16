@@ -1,7 +1,7 @@
 import math
 import re
 import requests
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Body
 from app.auth.routes import get_current_user
 from app.database import get_db
 from sqlalchemy.orm import Session
@@ -896,6 +896,7 @@ def _scan_eligible_pool(max_age_hours: int = 5, force: bool = False):
         43000663120: "Monumental Sports",
         43000662781: "DirtVision",
         43000664192: "Altitude Sports",
+        43000663267: "Fox One",
     }
     STATUSES = [2, 15]  # Open, Waiting on L1
 
@@ -1191,6 +1192,7 @@ def _servable(pool):
 
 @router.post("/automated/claim-next")
 def automated_claim_next(
+    payload: dict = Body(default={}),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -1259,6 +1261,11 @@ def automated_claim_next(
                 return {"ticket": {**t, "resumed": True}}
 
     pool = _servable(_scan_eligible_pool(5))
+    # Per-agent platform selection: only claim tickets from the platforms this
+    # agent chose to work (empty/absent = all platforms).
+    _sel = [p for p in (payload.get("platforms") or []) if p]
+    if _sel:
+        pool = [t for t in pool if t.get("platform") in _sel]
 
     # Tickets that must not be served: actively worked, skipped, or already sent
     # WITHOUT a newer customer reply. A ticket answered via Full Automated where
@@ -1388,6 +1395,7 @@ def automated_complete(
 
 @router.get("/automated/status")
 def automated_status(
+    platforms: str = "",
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -1417,6 +1425,10 @@ def automated_status(
     pool = _scan_eligible_pool(5)
     servable = _servable(pool)
     remaining = [t for t in servable if t["id"] not in blocked]
+    # pool_remaining reflects the agent's selected platforms so the watcher only
+    # tries to claim when there is work for THEM (empty = all platforms).
+    _sel = [p for p in platforms.split(",") if p]
+    remaining_for_me = [t for t in remaining if not _sel or t.get("platform") in _sel]
     flagged = [{
         "id": t["id"], "subject": t.get("subject", ""), "platform": t.get("platform", ""),
         "reason": "spam" if t.get("spam_flag") else "refund", "url": t.get("url", ""),
@@ -1448,7 +1460,8 @@ def automated_status(
     return {
         "active_admins": active_admins,
         "active_workers": active_workers,
-        "pool_remaining": len(remaining),
+        "pool_remaining": len(remaining_for_me),
+        "pool_remaining_all": len(remaining),
         "flagged": flagged,
         "sent_count": sent_count,
         "my_id": current_user.id,

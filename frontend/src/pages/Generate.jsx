@@ -112,6 +112,17 @@ export default function Generate() {
   const [inputMode, setInputMode] = useState('manual') // 'manual' | 'freshdesk' | 'automated'
   const [fdInput, setFdInput] = useState('')
   // Full Automated — shared claim pool (multi-admin auto-assignment)
+  // Per-agent platform selection: which clients' tickets to work (persisted).
+  const AUTO_PLATFORMS = ['SCHN+', 'Altitude Sports', 'DirtVision', 'Monumental Sports', 'Fox One']
+  const [autoPlatforms, setAutoPlatforms] = useState(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem('autoPlatforms') || 'null')
+      return Array.isArray(saved) ? saved : AUTO_PLATFORMS
+    } catch { return AUTO_PLATFORMS }
+  })
+  const autoPlatformsRef = useRef(autoPlatforms)
+  useEffect(() => { autoPlatformsRef.current = autoPlatforms; localStorage.setItem('autoPlatforms', JSON.stringify(autoPlatforms)) }, [autoPlatforms])
+  const toggleAutoPlatform = (p) => setAutoPlatforms(prev => prev.includes(p) ? prev.filter(x => x !== p) : [...prev, p])
   const [autoActive, setAutoActive] = useState(false)
   const [autoStage, setAutoStage] = useState('idle') // idle|loading|generating|review|done
   const [autoCurrent, setAutoCurrent] = useState(null) // ticket currently claimed by me
@@ -933,7 +944,7 @@ export default function Generate() {
     try {
       let ticket = null
       try {
-        const r = await client.post('/freshdesk/automated/claim-next')
+        const r = await client.post('/freshdesk/automated/claim-next', { platforms: autoPlatformsRef.current })
         ticket = r.data.ticket
       } catch (e) {
         toast.error(apiErr(e, 'Failed to claim next ticket'))
@@ -1000,7 +1011,7 @@ export default function Generate() {
     }
     const poll = async () => {
       try {
-        const r = await client.get('/freshdesk/automated/status')
+        const r = await client.get('/freshdesk/automated/status', { params: { platforms: (autoPlatformsRef.current || []).join(',') } })
         setAutoStatus(r.data)
         // The backend brake absorbs Freshdesk 429s (no error reaches the
         // browser), so sync the rate-limit widget from its countdown too.
@@ -1170,7 +1181,7 @@ export default function Generate() {
             {inputMode === 'automated' && (
               <div className="mb-4 space-y-3">
                 <div className="p-3 rounded-lg bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-700">
-                  <p className="text-xs text-purple-800 dark:text-purple-300 font-semibold mb-1">⚡ Full Automated — SCHN · Monumental · DirtVision · Altitude</p>
+                  <p className="text-xs text-purple-800 dark:text-purple-300 font-semibold mb-1">⚡ Full Automated</p>
                   <p className="text-[11px] text-purple-600 dark:text-purple-400 leading-snug">
                     Shared pool across all admins. Each admin is auto-assigned a different ticket
                     (Open / Waiting on L1, new customer reply within 5h): it loads, switches client,
@@ -1179,10 +1190,26 @@ export default function Generate() {
                   </p>
                 </div>
 
+                {/* Per-agent platform selection */}
+                <div className="p-3 rounded-lg bg-gray-50 dark:bg-gray-700/40 border border-gray-200 dark:border-gray-600">
+                  <p className="text-[11px] font-semibold text-gray-600 dark:text-gray-300 mb-2">Work tickets from:</p>
+                  <div className="flex flex-wrap gap-2">
+                    {AUTO_PLATFORMS.map(p => (
+                      <label key={p} className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs cursor-pointer select-none border transition-colors ${autoPlatforms.includes(p) ? 'bg-purple-100 dark:bg-purple-900/40 border-purple-300 dark:border-purple-600 text-purple-700 dark:text-purple-300' : 'bg-transparent border-gray-200 dark:border-gray-600 text-gray-400'}`}>
+                        <input type="checkbox" checked={autoPlatforms.includes(p)} onChange={() => toggleAutoPlatform(p)} className="rounded border-gray-300 dark:border-gray-600 text-purple-600 focus:ring-purple-400 w-3.5 h-3.5" />
+                        {p}
+                      </label>
+                    ))}
+                  </div>
+                  {autoPlatforms.length === 0 && (
+                    <p className="text-[11px] text-amber-600 dark:text-amber-400 mt-1.5">Select at least one platform to receive tickets.</p>
+                  )}
+                </div>
+
                 {!autoActive && (
                   <button
                     onClick={startAutomated}
-                    disabled={autoStarting}
+                    disabled={autoStarting || autoPlatforms.length === 0}
                     className="w-full px-4 py-2.5 bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white text-sm font-semibold rounded-lg transition-colors"
                   >
                     {autoStarting ? 'Starting…' : '⚡ Start Monitoring'}
