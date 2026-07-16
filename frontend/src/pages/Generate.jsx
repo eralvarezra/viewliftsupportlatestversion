@@ -178,7 +178,7 @@ export default function Generate() {
   activePlatformRef.current = activePlatform
 
 
-  const CMS_PLATFORM_SITE = { 1: 'schn', 3: 'altitude', 10: 'dirtvision', 4: 'monumental' }
+  const CMS_PLATFORM_SITE = { 1: 'schn', 3: 'altitude', 10: 'dirtvision', 4: 'monumental', 6: 'foxone' }
 
   const GROUP_TO_PLATFORM_ID = {
     43000666076: 1,   // SCHN Support -> SCHN+

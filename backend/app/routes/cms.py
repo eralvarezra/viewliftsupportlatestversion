@@ -31,6 +31,9 @@ DIRTVISION_SITE   = "dirtvision"
 MSN_XAPIKEY       = "eDDgMPynXA8W2YeB5b0qe9KtnsuKP96W8aBWQCEF"
 MSN_SITE          = "monumental-network"  # site id per the real CMS session (was "monumentalsportsnetwork")
 MSN_API_BASE      = "https://cms-api.monumentalsportsnetwork.com"  # Monumental runs its own CMS API host
+FOXONE_XAPIKEY    = "e079f65c-f2d7-43f0-9aa1-005ff9903ccf"
+FOXONE_SITE       = "caliente"  # Fox One MX = Caliente TV (site slug per the real CMS session)
+FOXONE_API_BASE   = "https://cms-foxone.api.viewlift.com"  # Fox One runs its own CMS API host
 CMS_GRAPHQL     = "https://cms.api.viewlift.com/management/graphql"
 CMS_INVOKE      = "https://cms.api.viewlift.com/v3.0/invoke"
 CMS_LOGIN_URL   = "https://cms.api.viewlift.com/v3.0/user/auth/login"
@@ -47,6 +50,7 @@ _CMS_CONFIGS = {
     "altitude":   {"xapikey": ALTITUD_XAPIKEY,    "site": ALTITUD_SITE,    "client_id": None},
     "dirtvision": {"xapikey": DIRTVISION_XAPIKEY, "site": DIRTVISION_SITE, "client_id": None},
     "monumental":  {"xapikey": MSN_XAPIKEY,        "site": MSN_SITE,        "client_id": None, "api_base": MSN_API_BASE},
+    "foxone":     {"xapikey": FOXONE_XAPIKEY,     "site": FOXONE_SITE,     "client_id": None, "api_base": FOXONE_API_BASE},
 }
 
 def _cfg(site: str) -> dict:
