@@ -71,6 +71,20 @@ export default function Profile() {
   const [msnCmsOtpMobile, setMsnCmsOtpMobile] = useState('')
   const [msnCmsOtp, setMsnCmsOtp] = useState('')
   const [msnCmsVerifying, setMsnCmsVerifying] = useState(false)
+  // FOX One CMS credentials
+  const [foxCmsCreds, setFoxCmsCreds] = useState(null)
+  const [foxCmsCredsUsername, setFoxCmsCredsUsername] = useState('')
+  const [foxCmsCredsPassword, setFoxCmsCredsPassword] = useState('')
+  const [foxCmsSavingCreds, setFoxCmsSavingCreds] = useState(false)
+  const [foxCmsShowCredForm, setFoxCmsShowCredForm] = useState(false)
+
+  // FOX One CMS token state
+  const [foxCmsStatus, setFoxCmsStatus] = useState(null)
+  const [foxCmsRefreshing, setFoxCmsRefreshing] = useState(false)
+  const [foxCmsNeedsOtp, setFoxCmsNeedsOtp] = useState(false)
+  const [foxCmsOtpMobile, setFoxCmsOtpMobile] = useState('')
+  const [foxCmsOtp, setFoxCmsOtp] = useState('')
+  const [foxCmsVerifying, setFoxCmsVerifying] = useState(false)
 
   useEffect(() => {
     client.get('/users/me')
@@ -93,6 +107,8 @@ export default function Profile() {
       client.get('/cms/credentials/status?site=dirtvision').then(r => setDvCmsCreds(r.data)).catch(() => {})
       client.get('/cms/token/status?site=monumental').then(r => setMsnCmsStatus(r.data)).catch(() => {})
       client.get('/cms/credentials/status?site=monumental').then(r => setMsnCmsCreds(r.data)).catch(() => {})
+      client.get('/cms/token/status?site=foxone').then(r => setFoxCmsStatus(r.data)).catch(() => {})
+      client.get('/cms/credentials/status?site=foxone').then(r => setFoxCmsCreds(r.data)).catch(() => {})
     }
   }, [profile])
 
@@ -485,6 +501,52 @@ export default function Profile() {
       setMsnCmsStatus(s.data)
     } catch (e) { toast.error(e?.response?.data?.detail || 'OTP verification failed') }
     finally { setMsnCmsVerifying(false) }
+  }
+  const handleSaveFoxCmsCreds = async () => {
+    setFoxCmsSavingCreds(true)
+    try {
+      await client.post('/cms/credentials?site=foxone', { username: foxCmsCredsUsername.trim(), password: foxCmsCredsPassword })
+      const r = await client.get('/cms/credentials/status?site=foxone')
+      setFoxCmsCreds(r.data)
+      setFoxCmsShowCredForm(false)
+      setFoxCmsCredsPassword('')
+      toast.success('FOX One CMS credentials saved')
+    } catch { toast.error('Failed to save FOX One credentials') }
+    finally { setFoxCmsSavingCreds(false) }
+  }
+  const handleDeleteFoxCmsCreds = async () => {
+    await client.delete('/cms/credentials?site=foxone')
+    setFoxCmsCreds(null)
+    toast('FOX One CMS credentials removed')
+  }
+  const handleFoxCmsRefresh = async () => {
+    setFoxCmsRefreshing(true)
+    setFoxCmsNeedsOtp(false)
+    try {
+      const r = await client.post('/cms/token/refresh?site=foxone')
+      if (r.data.needs_otp) {
+        setFoxCmsNeedsOtp(true)
+        setFoxCmsOtpMobile(r.data.obscure_mobile || '')
+        toast('FOX One OTP sent — check your phone')
+      } else {
+        toast.success('FOX One CMS token refreshed!')
+        const s = await client.get('/cms/token/status?site=foxone')
+        setFoxCmsStatus(s.data)
+      }
+    } catch { toast.error('FOX One refresh failed') }
+    finally { setFoxCmsRefreshing(false) }
+  }
+  const handleFoxCmsOtpVerify = async () => {
+    setFoxCmsVerifying(true)
+    try {
+      await client.post('/cms/token/verify-otp?site=foxone', { otp: foxCmsOtp.trim() })
+      toast.success('FOX One CMS token refreshed!')
+      setFoxCmsNeedsOtp(false)
+      setFoxCmsOtp('')
+      const s = await client.get('/cms/token/status?site=foxone')
+      setFoxCmsStatus(s.data)
+    } catch (e) { toast.error(e?.response?.data?.detail || 'OTP verification failed') }
+    finally { setFoxCmsVerifying(false) }
   }
   const isAdmin = profile?.role === 'admin' || profile?.is_superadmin
 
@@ -971,6 +1033,89 @@ export default function Profile() {
               <button onClick={handleMsnCmsRefresh} disabled={msnCmsRefreshing || !msnCmsCreds?.configured} title={!msnCmsCreds?.configured ? 'Configure MSN CMS credentials first' : ''} className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors">
                 {msnCmsRefreshing ? (<svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/></svg>) : '↻'}
                 {msnCmsRefreshing ? 'Refreshing…' : 'Refresh CMS Token'}
+              </button>
+            </div>
+          </div>
+        )}
+        {/* FOX One CMS Credentials + Token (admin only) */}
+        {isAdmin && (
+          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-5 space-y-5">
+            <div>
+              <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wide mb-1">
+                ViewLift CMS (FOX One)
+              </h2>
+              <p className="text-xs text-gray-400 dark:text-gray-500">
+                Credentials for the FOX One CMS. Used to refresh the shared FOX One access token.
+              </p>
+            </div>
+
+            <div className="space-y-3">
+              {foxCmsCreds?.configured ? (
+                <div className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg border border-gray-200 dark:border-gray-600">
+                  <div>
+                    <p className="text-xs font-medium text-gray-500 dark:text-gray-400">CMS account</p>
+                    <p className="text-sm text-gray-800 dark:text-white font-mono">
+                      {foxCmsCreds.username}
+                      {foxCmsCreds.from_env && <span className="ml-2 text-xs text-gray-400">(shared / env)</span>}
+                    </p>
+                  </div>
+                  {!foxCmsCreds.from_env && (
+                    <div className="flex gap-2">
+                      <button onClick={() => { setFoxCmsCredsUsername(foxCmsCreds.username); setFoxCmsShowCredForm(true) }} className="text-xs text-blue-600 dark:text-blue-400 hover:underline">Change</button>
+                      <button onClick={handleDeleteFoxCmsCreds} className="text-xs text-red-500 hover:underline">Remove</button>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="p-3 bg-yellow-50 dark:bg-yellow-900/20 rounded-lg border border-yellow-200 dark:border-yellow-700">
+                  <p className="text-xs text-yellow-800 dark:text-yellow-300">No FOX One CMS credentials configured.</p>
+                </div>
+              )}
+
+              {(foxCmsShowCredForm || !foxCmsCreds?.configured) && (
+                <div className="space-y-2 p-3 bg-gray-50 dark:bg-gray-700/40 rounded-lg border border-gray-200 dark:border-gray-600">
+                  <input type="email" value={foxCmsCredsUsername} onChange={e => setFoxCmsCredsUsername(e.target.value)} placeholder="FOX One CMS email" className="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                  <input type="password" value={foxCmsCredsPassword} onChange={e => setFoxCmsCredsPassword(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleSaveFoxCmsCreds()} placeholder="Password" className="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                  <div className="flex gap-2">
+                    <button onClick={handleSaveFoxCmsCreds} disabled={foxCmsSavingCreds || !foxCmsCredsUsername.trim() || !foxCmsCredsPassword.trim()} className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-colors">{foxCmsSavingCreds ? 'Saving…' : 'Save credentials'}</button>
+                    {foxCmsShowCredForm && <button onClick={() => { setFoxCmsShowCredForm(false); setFoxCmsCredsPassword('') }} className="px-4 py-2 text-sm text-gray-500 hover:text-gray-700 dark:hover:text-gray-300">Cancel</button>}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="border-t border-gray-100 dark:border-gray-700" />
+
+            <div className="space-y-3">
+              <p className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">Shared token status</p>
+              {foxCmsStatus && (
+                <div className="flex items-center gap-2">
+                  {foxCmsStatus.status === 'valid' && (() => {
+                    const mins = foxCmsStatus.minutes_remaining
+                    return (
+                      <span className={`inline-flex items-center gap-1 text-xs font-medium px-2 py-1 rounded-full ${mins < 60 ? 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400' : 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'}`}>
+                        {mins < 60 ? '⚠' : '✓'} Valid — expires in {mins < 60 ? `${mins}m` : `${Math.floor(mins / 60)}h ${mins % 60}m`}
+                      </span>
+                    )
+                  })()}
+                  {foxCmsStatus.status === 'expired' && <span className="inline-flex items-center gap-1 text-xs font-medium px-2 py-1 rounded-full bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400">✕ Expired</span>}
+                  {foxCmsStatus.status === 'not_set' && <span className="inline-flex items-center gap-1 text-xs font-medium px-2 py-1 rounded-full bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400">— Not set</span>}
+                </div>
+              )}
+
+              {foxCmsNeedsOtp && (
+                <div className="space-y-3 p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-700">
+                  <p className="text-sm text-blue-800 dark:text-blue-300">📱 Enter the OTP sent to your phone ending in <strong>{foxCmsOtpMobile || '????'}</strong></p>
+                  <div className="flex gap-2">
+                    <input type="text" value={foxCmsOtp} onChange={e => setFoxCmsOtp(e.target.value.replace(/\D/g, '').slice(0, 6))} onKeyDown={e => e.key === 'Enter' && handleFoxCmsOtpVerify()} placeholder="6-digit code" maxLength={6} className="flex-1 px-3 py-2 text-sm border border-blue-300 dark:border-blue-600 rounded-lg bg-white dark:bg-gray-700 text-gray-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 tracking-widest font-mono" />
+                    <button onClick={handleFoxCmsOtpVerify} disabled={foxCmsVerifying || foxCmsOtp.length < 6} className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white text-sm font-medium rounded-lg transition-colors">{foxCmsVerifying ? 'Verifying…' : 'Verify'}</button>
+                  </div>
+                </div>
+              )}
+
+              <button onClick={handleFoxCmsRefresh} disabled={foxCmsRefreshing || !foxCmsCreds?.configured} title={!foxCmsCreds?.configured ? 'Configure FOX One CMS credentials first' : ''} className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white text-sm font-medium rounded-lg transition-colors">
+                {foxCmsRefreshing ? (<svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/></svg>) : '↻'}
+                {foxCmsRefreshing ? 'Refreshing…' : 'Refresh CMS Token'}
               </button>
             </div>
           </div>
